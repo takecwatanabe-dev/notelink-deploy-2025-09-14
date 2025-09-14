@@ -1,5 +1,6 @@
-# Note Link v0.6.2（消しゴム安定化／再DLリンク）
-- **消しゴム**：pointer capture と `touch-action: none`、さらに `destination-out` が不安定な環境では**白インク消し**に自動フォールバック。
-- **キャンバス消去**ボタンを追加。
-- PDF埋め込みは `<object><embed/></object>` にしてモバイル互換性を改善。
-- 前版リンクが切れていた可能性があるため、**新しいZIP**を同梱。
+# Note Link v0.6.3（ペン/消しゴム/ドラッグ/PDF 安定）
+- **ペン/消しゴム**：Pointer Events + Pointer Capture、ResizeObserverで確実にサイズ同期。ツールが Pen/Marker/Eraser のときのみキャンバスが前面＆有効。
+- **選択ツール**を追加：付箋/グリッド/PDFブロックの移動は「選択」ツールで行います（描画中に誤タップを防止）。
+- **PDF追加**：input の label 連動＋**ドラッグ＆ドロップ**対応（PC）。
+- **ブロックのドラッグ**：onPointerDown ベースで**PC/Android**どちらでも移動可能。
+- 罫線の「横罫／なし」は継続。グラフ重なりが気になるときは「なし」を選択してください。
