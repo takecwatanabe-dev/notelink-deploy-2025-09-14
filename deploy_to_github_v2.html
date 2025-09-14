@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="ja"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Note Link – GitHub デプロイ（既存アップロード / 新規作成）</title>
+<style>body{font-family:system-ui,-apple-system,Segoe UI,Roboto,'Noto Sans JP',sans-serif;padding:20px}</style>
+<p>GitHubユーザー名、リポジトリ名、PATを入力して「実行」。</p>
+<label>モード</label><select id="mode"><option value="create">① 新規作成（Classic PAT必要）</option><option value="upload" selected>② 既存にアップロード（Fine-grained可）</option></select>
+<div><label>Username</label><input id="u" style="width:360px"></div>
+<div><label>Repository</label><input id="r" style="width:360px" value="notelink"></div>
+<div><label>Token (PAT)</label><input id="t" type="password" style="width:360px"></div>
+<button id="go">▶ 実行</button>
+<pre id="log" style="background:#111;color:#9f9;padding:10px;white-space:pre-wrap;max-height:300px;overflow:auto"></pre>
+<script>
+const files={"index.html":"PCFkb2N0eXBlIGh0bWw+PG1ldGEgY2hhcnNldD0ndXRmLTgnPjx0aXRsZT5Ob3RlIExpbms8L3RpdGxlPjxwPklmIHlvdSBzZWUgdGhpcyBwbGFjZWhvbGRlciwgcGxlYXNlIHVzZSB0aGUgcHJldmlvdXMgc3RhcnRlciBaSVAgeW91IGRvd25sb2FkZWQuPC9wPg==","README.md":"IyBOb3RlIExpbmsgdjAuNS54IChTdGFydGVyKQotIOe9q+e3muW5he+8iDEwLzgvNm1t77yJOiDlhaXlipvplovlp4vlvozjga/lpInmm7TkuI3lj68KLSDjgrDjg6njg5XmlrnnnLzvvIgxMC84LzVtbe+8iQotIOS7mOeuiy/jg4/jgqTjg6njgqTjg4jvvIjnsKHmmJPvvIkKLSBQREblkI3kuIDopqfvvIjjg4fjg6LvvIkKLSBsb2NhbFN0b3JhZ2Xkv53lrZgK","LICENSE":"TUlUIExpY2Vuc2UKClBlcm1pc3Npb24gaXMgaGVyZWJ5IGdyYW50ZWQuLi4=",".gitignore":"LkRTX1N0b3JlCm5vZGVfbW9kdWxlcy8KZGlzdC8KKi5sb2cK"}
+function log(m){const el=document.getElementById('log');el.textContent+=m+"\n";el.scrollTop=el.scrollHeight}
+async function gh(p,m,t,b){const r=await fetch("https://api.github.com"+p,{method:m,headers:{"Accept":"application/vnd.github+json","Authorization":"Bearer "+t},body:b?JSON.stringify(b):undefined});const tx=await r.text();let d;try{d=JSON.parse(tx)}catch{d=tx};if(!r.ok)throw new Error(m+" "+p+" → "+r.status+"\n"+tx);return d}
+async function createRepo(u,r,t){log("新規リポジトリ作成…");const d=await gh("/user/repos","POST",t,{name:r,private:false,auto_init:false,description:"Note Link starter"});log("OK: "+d.html_url)}
+async function upload(u,r,t){for(const [path,b64] of Object.entries(files)){log("upload "+path);try{await gh(`/repos/${u}/${r}/contents/${encodeURIComponent(path)}`,"PUT",t,{message:"add "+path,content:b64,branch:"main"})}catch(e){log("mainなし→defaultへ");await gh(`/repos/${u}/${r}/contents/${encodeURIComponent(path)}`,"PUT",t,{message:"add "+path,content:b64})}}log("done → https://github.com/"+u+"/"+r)}
+document.getElementById('go').onclick=async()=>{const u=document.getElementById('u').value.trim();const r=document.getElementById('r').value.trim();const t=document.getElementById('t').value.trim();const mode=document.getElementById('mode').value;if(!u||!r||!t){alert("未入力があります");return};try{if(mode==="create"){await createRepo(u,r,t)};await upload(u,r,t);log("Pages: settings/pages で main/(root) を選択")}catch(err){log("ERR: "+err.message)}}
+</script></html>
