@@ -1,9 +1,10 @@
-# Note Link v0.5.x (Starter – Full Demo)
-- ページ単位で罫線幅（10/8/6mm）を設定（入力開始後は変更不可）
-- グラフ方眼（10/8/5mm）
-- 付箋/ハイライト（簡易）
-- PDF名一覧（デモ）
-- localStorage保存
+# Note Link v0.5.1（閲覧/編集トグル対応）
+- 画面右上：**閲覧モード／編集モード** 切替
+- **スマホは既定で閲覧**（後から「編集へ切替」可能）
+- 閲覧時は、入力・ページ追加・PDF変更・ツールが使えない（誤操作防止）
+- 罫線幅は **入力開始後は固定**
 
-## 公開（GitHub Pages）
-Settings → Pages → Source: Deploy from a branch / Branch: main / (root) → Save
+## アップロード方法（GitHub Web）
+1. リポジトリを開く → **Code → Go to file → Add file → Upload files**
+2. このフォルダの `index.html` をドラッグ＆ドロップ → **Commit changes**
+3. 公開URLを **Ctrl+F5** で更新（数十秒で反映）
