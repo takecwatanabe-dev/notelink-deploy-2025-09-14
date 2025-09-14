@@ -3,125 +3,145 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Note Link v0.6.3e – No-CDN（上部ツール／入力改善／横スクロール抑制）</title>
+<title>Note Link v0.6.3f – No-CDN（左ツール復元・最小修正）</title>
 <style>
-  :root{--border:#e5e7eb;--muted:#6b7280;--bg:#f8fafc;--brand:#0f766e;}
+  :root{--border:#e5e7eb;--muted:#6b7280;--bg:#f8fafc;--brand:#0f766e}
   *{box-sizing:border-box}
   html,body{height:100%}
   body{margin:0;background:var(--bg);font-family:ui-sans-serif,system-ui,Segoe UI,Roboto;overflow-x:hidden}
-  .bar{position:sticky;top:0;z-index:30;display:flex;align-items:center;gap:8px;padding:10px 14px;
-       color:#fff;background:linear-gradient(90deg,#115e59,#0f766e)}
+
+  .top{grid-column:1/3;display:flex;align-items:center;gap:8px;padding:10px 14px;
+       color:#fff;background:linear-gradient(90deg,#115e59,#0f766e);position:sticky;top:0;z-index:50}
   .brand{font-weight:700}
   .chip{font-size:12px;padding:2px 8px;border-radius:999px;background:rgba(255,255,255,.15);border:1px solid rgba(255,255,255,.35)}
-  .btn{border:1px solid var(--border);background:#fff;color:#111;padding:6px 10px;border-radius:8px;cursor:pointer}
-  .btn[disabled]{opacity:.5;cursor:not-allowed}
-  .wrap{max-width:1100px;margin:0 auto;padding:12px}
+
+  .app{display:grid;grid-template-columns:280px 1fr;grid-template-rows:auto 1fr;min-height:100vh}
+  .sidebar{grid-row:2/3;background:#fff;border-right:1px solid var(--border);padding:10px;overflow:auto}
+  .main{grid-row:2/3;padding:12px}
   .panel{background:#fff;border:1px solid var(--border);border-radius:14px;box-shadow:0 2px 10px rgba(0,0,0,.04)}
-  .title{padding:12px}
-  .tools{border-top:1px solid var(--border);padding:8px 12px;display:flex;flex-wrap:wrap;gap:6px}
+
+  .btn{border:1px solid var(--border);background:#fff;padding:6px 10px;border-radius:8px;cursor:pointer}
+  .btn[disabled]{opacity:.5;cursor:not-allowed}
+  .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+  .sep{height:1px;background:var(--border);margin:10px 0}
   .tools .active{background:#111827;color:#fff}
-  .toolsCollapse{display:flex;align-items:center;justify-content:space-between;padding:8px 12px;border-top:1px solid var(--border);background:#f8fafc}
+
+  .title{padding:12px}
   .pageWrap{padding:0 12px 12px}
-  .pageHolder{width:100%;display:flex;justify-content:center}
+  .holder{width:100%;display:flex;justify-content:center}
   .page{position:relative;overflow:hidden;border:1px solid var(--border);border-radius:14px;background:#fff;max-width:100%}
   .notearea{position:absolute;inset:0;width:100%;height:100%;padding:12px;border:0;background:transparent;resize:none;z-index:1}
   .gridOverlay{position:absolute;inset:0;pointer-events:none;z-index:0}
-  #overlay{position:absolute;inset:0;z-index:4}       /* PDF/グリッド/付箋 */
-  #penLayer{position:absolute;inset:0;touch-action:none;z-index:5} /* ペンは最前面（描画中）*/
+  #overlay{position:absolute;inset:0;z-index:4}        /* PDF/グリッド/付箋 */
+  #penLayer{position:absolute;inset:0;touch-action:none;z-index:5} /* ペン最前面（描画中） */
+
   .sticky{position:absolute;background:#fef3c7;border:1px solid #f59e0b;border-radius:8px;box-shadow:0 2px 10px rgba(0,0,0,.08);resize:both;overflow:auto}
   .sticky header{cursor:move;padding:4px 8px;background:rgba(0,0,0,.08);display:flex;gap:6px;align-items:center}
   .sticky header input{flex:1;border:0;background:transparent;font-weight:600}
   .sticky textarea{width:100%;height:calc(100% - 32px);border:0;background:transparent;padding:8px;resize:none}
+
   .block{position:absolute;background:#fff;border:1px solid var(--border);border-radius:8px;box-shadow:0 2px 10px rgba(0,0,0,.08);resize:both;overflow:hidden}
   .block header{cursor:move;padding:4px 8px;background:rgba(0,0,0,.06);display:flex;justify-content:space-between;align-items:center}
   .badge{font-size:12px;padding:2px 6px;border:1px solid var(--border);border-radius:999px;background:#fff}
+
+  @media (max-width: 900px){
+    .app{grid-template-columns:1fr}
+    .sidebar{position:fixed;inset:0 30% 0 0;z-index:60;display:none}
+    .sidebar.open{display:block}
+    #openDrawer{display:inline-block}
+  }
+  #openDrawer{display:none}
 </style>
 </head>
 <body>
-
-<div class="bar">
-  <span class="brand">Note Link</span>
-  <span class="chip">v0.6.3e No-CDN</span>
-  <div style="margin-left:auto;display:flex;gap:8px;align-items:center">
-    <button class="btn" id="prevBtn">◀</button>
-    <span id="pageInfo" class="chip" style="color:#fff">ページ 1/1</span>
-    <button class="btn" id="nextBtn">▶</button>
-    <button class="btn" id="viewBtn">閲覧</button>
-    <button class="btn" id="editBtn" style="background:#111827;color:#fff">編集</button>
-  </div>
-</div>
-
-<div class="wrap">
-  <div class="panel">
-    <div class="title">
-      <input id="titleInput" class="btn" style="width:100%;padding:10px" placeholder="タイトル">
+<div class="app">
+  <div class="top">
+    <button class="btn" id="openDrawer">☰</button>
+    <span class="brand">Note Link</span>
+    <span class="chip">v0.6.3f No-CDN</span>
+    <div style="margin-left:auto;display:flex;gap:8px;align-items:center">
+      <button class="btn" id="prevBtn">◀</button>
+      <span id="pageInfo" class="chip">ページ 1/1</span>
+      <button class="btn" id="nextBtn">▶</button>
+      <button class="btn" id="viewBtn">閲覧</button>
+      <button class="btn" id="editBtn" style="background:#111827;color:#fff">編集</button>
     </div>
+  </div>
 
-    <div class="tools" id="tools">
-      <span class="chip">モード</span>
+  <!-- 左ツール（復元） -->
+  <aside class="sidebar" id="sidebar">
+    <div class="row"><span class="chip">ページ</span>
+      <button class="btn" id="addPage">＋ページ</button><button class="btn" id="delPage">ページ削除</button></div>
+    <div class="sep"></div>
+
+    <div class="row tools"><span class="chip">モード</span>
       <button class="btn active" data-tool="select">選択</button>
       <button class="btn" data-tool="text">テキスト</button>
       <button class="btn" data-tool="pen">ペン</button>
       <button class="btn" data-tool="marker">マーカー</button>
       <button class="btn" data-tool="eraser">消しゴム</button>
       <button class="btn" id="addSticky">付箋</button>
+    </div>
 
-      <span class="chip">太さ</span>
+    <div class="row"><span class="chip">太さ</span>
       <select class="btn" id="penWidth"><option>2</option><option selected>4</option><option>8</option><option>12</option></select>
       <input type="color" class="btn" id="penColor" value="#111111" style="padding:0;width:44px;height:32px">
+    </div>
 
+    <div class="row">
       <span class="chip">罫線</span>
       <select class="btn" id="lineType"><option value="ruled" selected>横罫</option><option value="none">なし</option></select>
       <span class="chip">幅</span>
       <select class="btn" id="lineGap"><option>10</option><option>8</option><option>6</option></select>
+    </div>
 
+    <div class="row">
       <button class="btn" id="gridToggle">グラフ升目 OFF</button>
       <select class="btn" id="gridSize"><option>10</option><option>8</option><option>5</option></select>
       <button class="btn" id="gridBlock">グリッド貼り込み</button>
+    </div>
 
-      <button class="btn" id="addPage">＋ページ</button>
-      <button class="btn" id="delPage">ページ削除</button>
-
-      <span class="chip">用紙</span>
+    <div class="sep"></div>
+    <div class="row"><span class="chip">用紙</span>
       <select class="btn" id="paper"><option value="a4" selected>A4</option><option value="b5">B5</option><option value="a5">A5</option><option value="letter">Letter</option></select>
       <select class="btn" id="orient"><option value="portrait" selected>縦</option><option value="landscape">横</option></select>
       <button class="btn" id="printBtn">印刷（PDF保存）</button>
-
-      <span class="chip">PDF</span>
-      <input type="file" id="pdfInput" accept="application/pdf" class="btn">
-      <span id="pdfList"></span>
-
-      <span class="chip">保存</span>
-      <button class="btn" id="saveBtn">保存（ブラウザ）</button>
-      <button class="btn" id="loadBtn">読込（ブラウザ）</button>
-      <button class="btn" id="exportBtn">エクスポート（JSON）</button>
-      <input type="file" id="importInput" accept="application/json" class="btn" style="width:200px">
     </div>
 
-    <div class="toolsCollapse">
-      <span style="color:#334155">保存先：このブラウザ（localStorage）</span>
-      <button class="btn" id="toggleTools">▲ ツールを畳む</button>
-    </div>
+    <div class="sep"></div>
+    <div class="row"><span class="chip">PDFライブラリ</span></div>
+    <div class="row"><input type="file" id="pdfInput" accept="application/pdf" class="btn"></div>
+    <div id="pdfList" style="max-height:40vh;overflow:auto"></div>
 
-    <div class="pageWrap">
-      <div class="pageHolder" id="pageHolder">
-        <div class="page" id="page" style="width:840px;height:1188px">
-          <div id="gridOverlay" class="gridOverlay"></div>
-          <div id="overlay"></div>
-          <canvas id="penLayer"></canvas>
-          <textarea id="content" class="notearea" placeholder="ここにノートを書き始める…"></textarea>
+    <div class="sep"></div>
+    <div class="row"><span class="chip">保存先：このブラウザ（localStorage）</span></div>
+    <div class="row"><button class="btn" id="saveBtn">保存（ブラウザ）</button><button class="btn" id="loadBtn">読込（ブラウザ）</button></div>
+    <div class="row"><button class="btn" id="exportBtn">エクスポート（JSON）</button><input type="file" id="importInput" accept="application/json" class="btn" style="width:180px"></div>
+  </aside>
+
+  <main class="main">
+    <div class="panel">
+      <div class="title"><input id="titleInput" class="btn" style="width:100%;padding:10px" placeholder="タイトル"></div>
+      <div class="pageWrap">
+        <div class="holder" id="holder">
+          <div class="page" id="page" style="width:840px;height:1188px">
+            <div id="gridOverlay" class="gridOverlay"></div>
+            <div id="overlay"></div>
+            <canvas id="penLayer"></canvas>
+            <textarea id="content" class="notearea" placeholder="ここにノートを書き始める…"></textarea>
+          </div>
         </div>
       </div>
     </div>
-  </div>
+  </main>
 </div>
 
 <script>
 (function(){
-  const STORAGE='notelink.nocdn.v063e';
+  const STORAGE='notelink.nocdn.v063f';
   const $=s=>document.querySelector(s);
   const el={
-    page:$('#page'), holder:$('#pageHolder'), overlay:$('#overlay'), grid:$('#gridOverlay'), pen:$('#penLayer'),
+    page:$('#page'), holder:$('#holder'), overlay:$('#overlay'), grid:$('#gridOverlay'), pen:$('#penLayer'),
     content:$('#content'), title:$('#titleInput'), info:$('#pageInfo'),
     lineType:$('#lineType'), lineGap:$('#lineGap'), gridToggle:$('#gridToggle'), gridSize:$('#gridSize'),
     paper:$('#paper'), orient:$('#orient'), printBtn:$('#printBtn'),
@@ -132,28 +152,24 @@
     viewBtn:$('#viewBtn'), editBtn:$('#editBtn'),
     saveBtn:$('#saveBtn'), loadBtn:$('#loadBtn'),
     exportBtn:$('#exportBtn'), importInput:$('#importInput'),
-    toggleTools:$('#toggleTools'), tools:$('#tools')
+    sidebar:$('#sidebar'), openDrawer:$('#openDrawer')
   };
+
+  // モバイルで左ツール開閉
+  el.openDrawer.addEventListener('click',()=>{ el.sidebar.classList.toggle('open'); });
+
   const PX_PER_MM=3.78;
+  function mmToPx(mm){return mm*PX_PER_MM;}
+  function dims(ps,ori){ const m={a4:[210,297],b5:[182,257],a5:[148,210],letter:[216,279]}; let [w,h]=m[ps]||m.a4; if(ori==='landscape') [w,h]=[h,w]; return [w*PX_PER_MM,h*PX_PER_MM]; }
+
+  // 状態（ink: ペン画像）
   const state={pages:[{id:u(),kind:'note',title:'',content:'',style:{lineType:'ruled',ruledSpacingMm:10,gridEnabled:false,gridSizeMm:10},notes:[],blocks:[],ink:''}],index:0,pageSize:'a4',orientation:'portrait'};
   try{ const s=JSON.parse(localStorage.getItem(STORAGE)||''); if(s) Object.assign(state,s);}catch{}
   let tool='select', mode='edit';
 
-  function mmToPx(mm){return mm*PX_PER_MM;}
-  function dims(ps,ori){ const m={a4:[210,297],b5:[182,257],a5:[148,210],letter:[216,279]}; let [w,h]=m[ps]||m.a4; if(ori==='landscape') [w,h]=[h,w]; return [w*PX_PER_MM,h*PX_PER_MM]; }
-
-  // ツール畳む/開く
-  let toolsOpen=true;
-  el.toggleTools.addEventListener('click',()=>{
-    toolsOpen=!toolsOpen;
-    el.tools.style.display=toolsOpen?'flex':'none';
-    el.toggleTools.textContent = toolsOpen ? '▲ ツールを畳む' : '▼ ツールを開く';
-  });
-
-  // 表示をページ幅にフィット（横スクロール抑制）
   function fitWidth(){
     const [W,H]=dims(state.pageSize,state.orientation);
-    const maxW = el.holder.clientWidth - 4;    // 余白
+    const maxW = el.holder.clientWidth - 4;
     const w = Math.min(W, Math.max(320, maxW));
     const h = w * (H/W);
     el.page.style.width=w+'px'; el.page.style.height=h+'px';
@@ -168,10 +184,10 @@
     el.gridSize.value=pg.style.gridSizeMm||10;
     el.gridToggle.textContent='グラフ升目 '+(pg.style.gridEnabled?'ON':'OFF');
 
-    fitWidth(); // サイズ整える
+    fitWidth();
 
     // 罫線
-    const gapPx = mmToPx(pg.style.ruledSpacingMm||10);
+    const gapPx=mmToPx(pg.style.ruledSpacingMm||10);
     if(pg.style.lineType==='ruled'){
       el.content.style.backgroundImage='repeating-linear-gradient(to bottom, rgba(0,0,0,0.08) 0, rgba(0,0,0,0.08) 1px, transparent 1px, transparent '+gapPx+'px)';
       el.content.style.backgroundPosition='0 12px'; el.content.style.lineHeight=gapPx+'px'; el.content.style.paddingTop='12px';
@@ -180,34 +196,34 @@
     }
 
     // グリッド（最背面）
-    el.grid.style.backgroundImage= pg.style.gridEnabled?
-      'linear-gradient(rgba(0,0,0,0.1) 1px, transparent 1px), linear-gradient(90deg, rgba(0,0,0,0.1) 1px, transparent 1px)' : 'none';
-    el.grid.style.backgroundSize = mmToPx(pg.style.gridSizeMm||10)+'px '+mmToPx(pg.style.gridSizeMm||10)+'px';
+    el.grid.style.backgroundImage=pg.style.gridEnabled?
+      'linear-gradient(rgba(0,0,0,0.1) 1px, transparent 1px), linear-gradient(90deg, rgba(0,0,0,0.1) 1px, transparent 1px)':'none';
+    el.grid.style.backgroundSize=mmToPx(pg.style.gridSizeMm||10)+'px '+mmToPx(pg.style.gridSizeMm||10)+'px';
 
-    // キャンバスはサイズだけ追従、内容は保持
+    // キャンバスは内容保持でサイズだけ追従
     const w=Math.round(el.page.clientWidth), h=Math.round(el.page.clientHeight);
     if(el.pen.width!==w || el.pen.height!==h){
       const tmp=document.createElement('canvas'); tmp.width=el.pen.width; tmp.height=el.pen.height;
       tmp.getContext('2d').drawImage(el.pen,0,0);
       el.pen.width=w; el.pen.height=h;
       el.pen.getContext('2d').drawImage(tmp,0,0,w,h);
-      if(tmp.width && tmp.height) saveInk();
+      if(tmp.width&&tmp.height) saveInk();
     }
 
-    // 入力可否：描画ツール（ペン/マーカー/消しゴム）の時だけテキスト面を無効
+    // 入力可否：描画ツールの時だけテキスト面を無効
     const drawingTool=['pen','marker','eraser'].includes(tool) && mode==='edit';
-    el.content.readOnly = (mode!=='edit');
-    el.content.style.pointerEvents = (!drawingTool && mode==='edit') ? 'auto' : 'none';
+    el.content.readOnly=(mode!=='edit');
+    el.content.style.pointerEvents=(!drawingTool && mode==='edit')?'auto':'none';
 
-    // オーバーレイのポインタ：選択ツールの時だけ操作可
-    el.overlay.style.pointerEvents = (tool==='select' && mode==='edit') ? 'auto' : 'none';
+    // オーバーレイの操作：選択ツールの時だけ可能
+    el.overlay.style.pointerEvents=(tool==='select' && mode==='edit')?'auto':'none';
 
-    // 既存インクを復帰
+    // ペン画像を復帰
     if(pg.ink){
       const im=new Image(); im.onload=()=>{ el.pen.getContext('2d').drawImage(im,0,0,el.pen.width,el.pen.height); }; im.src=pg.ink;
     }
 
-    // オーバーレイ要素
+    // オーバーレイ
     el.overlay.innerHTML='';
     (pg.blocks||[]).forEach(b=>addBlockEl(b));
     (pg.notes||[]).forEach(n=>addStickyEl(n));
@@ -219,8 +235,8 @@
 
   // ページ操作
   $('#addPage').addEventListener('click',()=>{ if(mode!=='edit') return;
-    const cur=state.pages[state.index];
-    const n={id:u(),kind:'note',title:cur.title||'',content:'',style:{lineType:cur.style.lineType,ruledSpacingMm:cur.style.ruledSpacingMm,gridEnabled:false,gridSizeMm:cur.style.gridSizeMm},notes:[],blocks:[],ink:''};
+    const c=cur();
+    const n={id:u(),kind:'note',title:c.title||'',content:'',style:{lineType:c.style.lineType,ruledSpacingMm:c.style.ruledSpacingMm,gridEnabled:false,gridSizeMm:c.style.gridSizeMm},notes:[],blocks:[],ink:''};
     state.pages.push(n); state.index=state.pages.length-1; save(); render();
   });
   $('#delPage').addEventListener('click',()=>{ if(mode!=='edit') return;
@@ -229,7 +245,7 @@
     state.pages.splice(state.index,1); state.index=Math.max(0,state.index-1); save(); render();
   });
 
-  // モード／ツール
+  // ツール/モード
   function setTool(t){ tool=t; document.querySelectorAll('[data-tool]').forEach(b=>b.classList.toggle('active', b.dataset.tool===t)); render(); }
   document.querySelectorAll('[data-tool]').forEach(b=>b.addEventListener('click',()=>setTool(b.dataset.tool)));
   el.viewBtn.addEventListener('click',()=>{mode='view'; el.viewBtn.style.background='#111827'; el.viewBtn.style.color='#fff'; el.editBtn.style.background='#fff'; el.editBtn.style.color='#111827'; render();});
@@ -243,7 +259,7 @@
   el.gridToggle.addEventListener('click',()=>{ cur().style.gridEnabled=!cur().style.gridEnabled; save(); render(); });
   el.gridSize.addEventListener('change',()=>{ cur().style.gridSizeMm=Number(el.gridSize.value); save(); render(); });
 
-  // 用紙／印刷
+  // 用紙/印刷
   el.paper.value=state.pageSize; el.orient.value=state.orientation;
   el.paper.addEventListener('change',()=>{ state.pageSize=el.paper.value; save(); render(); });
   el.orient.addEventListener('change',()=>{ state.orientation=el.orient.value; save(); render(); });
@@ -262,11 +278,11 @@
   // PDF
   el.pdfInput.addEventListener('change',(e)=>{ const f=e.target.files&&e.target.files[0]; if(!f) return; const url=URL.createObjectURL(f); addPdfItem({id:u(),name:f.name,url}); e.target.value=""; });
   function addPdfItem(item){
-    const link=document.createElement('button'); link.className='btn'; link.textContent=short(item.name,18);
-    link.title=item.name; link.addEventListener('click',()=>window.open(item.url,'_blank'));
-    const ins=document.createElement('button'); ins.className='btn'; ins.textContent='貼り込む';
-    ins.addEventListener('click',()=>{ if(mode!=='edit'){ mode='edit'; el.editBtn.click(); } const [W,H]=dims(state.pageSize,state.orientation); const b={id:u(),kind:'pdf',x:30,y:60,w:W*0.6,h:H*0.6,url:item.url,name:item.name}; cur().blocks.push(b); save(); render(); });
-    el.pdfList.prepend(ins); el.pdfList.prepend(link);
+    const row=document.createElement('div'); row.className='row'; row.innerHTML=`<span class="badge" title="${item.name}">${short(item.name,18)}</span>`;
+    row.append(btn('開く',()=>window.open(item.url,'_blank')));
+    row.append(btn('新規ページ',()=>{ const p={id:u(),kind:'pdf',title:item.name,url:item.url,style:{},notes:[],blocks:[],ink:''}; state.pages.push(p); state.index=state.pages.length-1; save(); render(); }));
+    row.append(btn('貼り込む',()=>{ if(mode!=='edit'){ mode='edit'; el.editBtn.click(); } const [W,H]=dims(state.pageSize,state.orientation); const b={id:u(),kind:'pdf',x:30,y:60,w:W*0.6,h:H*0.6,url:item.url,name:item.name}; cur().blocks.push(b); save(); render(); }));
+    el.pdfList.prepend(row);
   }
 
   // グリッド貼り込み
@@ -277,7 +293,7 @@
   // 付箋
   el.addSticky.addEventListener('click',()=>{ const n={id:u(),x:20,y:20,w:180,h:140,title:'付箋',text:''}; cur().notes.push(n); save(); render(); });
 
-  // オーバーレイ要素
+  // オーバーレイ
   function cur(){ return state.pages[state.index]; }
   function addStickyEl(n){
     const div=document.createElement('div'); div.className='sticky'; div.style.left=n.x+'px'; div.style.top=n.y+'px'; div.style.width=n.w+'px'; div.style.height=n.h+'px';
@@ -291,7 +307,7 @@
   }
   function addBlockEl(b){
     const div=document.createElement('div'); div.className='block'; div.style.left=b.x+'px'; div.style.top=b.y+'px'; div.style.width=b.w+'px'; div.style.height=b.h+'px';
-    div.innerHTML = `<header><span class="badge">${b.kind==='grid'?'グリッド':short(b.name||'PDF',16)}</span><button class="btn">×</button></header><div class="body" style="width:100%;height:calc(100% - 32px)"></div>`;
+    div.innerHTML=`<header><span class="badge">${b.kind==='grid'?'グリッド':short(b.name||'PDF',16)}</span><button class="btn">×</button></header><div class="body" style="width:100%;height:calc(100% - 32px)"></div>`;
     const header=div.querySelector('header'); const close=div.querySelector('button'); const body=div.querySelector('.body');
     header.addEventListener('pointerdown',dragStart(div,(x,y)=>{ b.x=x;b.y=y; save(); }));
     close.addEventListener('click',()=>{ cur().blocks=cur().blocks.filter(x=>x.id!==b.id); save(); render(); });
@@ -299,7 +315,7 @@
       body.style.backgroundImage='linear-gradient(rgba(0,0,0,0.1) 1px, transparent 1px), linear-gradient(90deg, rgba(0,0,0,0.1) 1px, transparent 1px)';
       body.style.backgroundSize=(b.gridPx||32)+'px '+(b.gridPx||32)+'px';
     }else{
-      body.innerHTML = `<object data="${b.url}" type="application/pdf" style="width:100%;height:100%"><embed src="${b.url}" type="application/pdf" style="width:100%;height:100%"></embed></object>`;
+      body.innerHTML=`<object data="${b.url}" type="application/pdf" style="width:100%;height:100%"><embed src="${b.url}" type="application/pdf" style="width:100%;height:100%"></embed></object>`;
     }
     el.overlay.appendChild(div);
   }
@@ -337,7 +353,6 @@
   });
   function endDraw(){ if(!drawing) return; drawing=false; saveInk(); }
   el.pen.addEventListener('pointerup',endDraw); el.pen.addEventListener('pointercancel',endDraw);
-
   function saveInk(){ try{ cur().ink = el.pen.toDataURL('image/png'); save(); }catch{} }
 
   // util
