@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Note Link v0.5.4 – 付箋入力修正・印刷強化・ズーム</title>
+  <title>Note Link v0.5.5 – 左ツールバー/付箋修正/PDFプレビュー</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
   <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
@@ -11,18 +11,13 @@
   <style>
     .btn:disabled { opacity:.5; cursor:not-allowed; }
     .chip{ font-size:12px; padding:2px 8px; border-radius:999px; border:1px solid #ddd; }
-    .chip-view{ background:#f1f5f9; }
-    .chip-edit{ background:#e6ffed; border-color:#b7f7c2; }
     .note{ box-shadow:0 2px 10px rgba(0,0,0,.06); resize:both; overflow:auto; }
     .note:focus-within{ outline:2px solid #60a5fa; }
-    .note-header{ cursor:move; user-select:none; background:rgba(0,0,0,.05); }
-    .page{ background:white; }
-    .page-zoom{ transform-origin: top left; }
+    .note-header{ cursor:move; user-select:none; background:rgba(0,0,0,.08); }
+    .drawer-enter { transform: translateX(-100%); }
+    .drawer-open  { transform: translateX(0); }
     @media print{
-      body{ background:white !important; }
       .no-print{ display:none !important; }
-      .page-zoom{ transform:none !important; }
-      .page{ page-break-after:always; }
     }
   </style>
 </head>
@@ -32,10 +27,10 @@
   <script type="text/babel">
     const { useEffect, useMemo, useRef, useState } = React;
     const PX_PER_MM = 3.78;
-    const VERSION = "v0.5.4";
+    const VERSION = "v0.5.5";
     const defaultStyle = { lineType: "ruled", ruledSpacingMm: 10, gridEnabled: false, gridSizeMm: 10 };
-    const STORAGE_KEY = "notelink.v0.5.4";
-    const MODE_KEY = "notelink.v0.5.4.mode";
+    const STORAGE_KEY = "notelink.v0.5.5";
+    const MODE_KEY = "notelink.v0.5.5.mode";
 
     const loadState = () => { try { return JSON.parse(localStorage.getItem(STORAGE_KEY) || ""); } catch { return null; } };
     const saveState  = (s) => localStorage.setItem(STORAGE_KEY, JSON.stringify(s));
@@ -43,38 +38,19 @@
     const saveMode   = (m) => localStorage.setItem(MODE_KEY, m);
     const uuid       = () => Math.random().toString(36).slice(2,10);
 
-    // 付箋コンポーネント（入力はアンコントロールド、blur時に保存）
+    // 付箋（ローカル状態→blur時に親へ保存）
     function Sticky({ note, isView, onHeaderDown, onDelete, onCommit }){
-      const titleRef = React.useRef(null);
-      const bodyRef  = React.useRef(null);
-      // 新しい付箋に切り替わった時だけ初期値を流し込む
-      React.useEffect(() => {
-        if (titleRef.current) titleRef.current.textContent = note.title || "付箋";
-        if (bodyRef.current)  bodyRef.current.textContent  = note.text  || "";
-      }, [note.id]);
-      const commit = () => {
-        if (isView) return;
-        const title = titleRef.current ? titleRef.current.textContent : "";
-        const text  = bodyRef.current  ? bodyRef.current.textContent  : "";
-        onCommit(note.id, { title, text });
-      };
+      const [title, setTitle] = React.useState(note.title || "付箋");
+      const [text, setText]   = React.useState(note.text || "");
+      useEffect(()=>{ setTitle(note.title || "付箋"); setText(note.text || ""); }, [note.id]);
+      const commit = () => { if (isView) return; onCommit(note.id, { title, text }); };
       return (
-        <div className="note absolute bg-yellow-200 rounded"
-             style={{ left:note.x, top:note.y, width:note.w, height:note.h }}>
-          <div className="note-header text-xs px-2 py-1 rounded-t flex items-center justify-between"
-               onMouseDown={(e)=>onHeaderDown(e, note)}>
-            <span ref={titleRef}
-                  contentEditable={!isView}
-                  suppressContentEditableWarning
-                  onBlur={commit}
-                  className="font-medium outline-none select-text whitespace-pre-wrap break-words"></span>
-            <button className="text-xs px-1 border rounded btn" onClick={()=>onDelete(note.id)} disabled={isView}>×</button>
+        <div className="note absolute bg-yellow-200 rounded" style={{ left:note.x, top:note.y, width:note.w, height:note.h }}>
+          <div className="note-header text-xs px-2 py-1 rounded-t flex items-center justify-between" onMouseDown={(e)=>onHeaderDown(e, note)}>
+            <input className="bg-transparent outline-none font-medium w-full" value={title} onChange={e=>setTitle(e.target.value)} onBlur={commit} disabled={isView} />
+            <button className="text-xs px-1 border rounded ml-2 btn" onClick={()=>onDelete(note.id)} disabled={isView}>×</button>
           </div>
-          <div ref={bodyRef}
-               contentEditable={!isView}
-               suppressContentEditableWarning
-               onBlur={commit}
-               className="p-2 text-sm outline-none whitespace-pre-wrap break-words select-text"></div>
+          <textarea className="p-2 text-sm bg-transparent w-full h-[calc(100%-28px)] outline-none" value={text} onChange={e=>setText(e.target.value)} onBlur={commit} readOnly={isView}></textarea>
         </div>
       );
     }
@@ -93,6 +69,8 @@
       const [pageSize, setPageSize] = useState(init.pageSize || "a4");
       const [orientation, setOrientation] = useState(init.orientation || "portrait");
       const [zoom, setZoom] = useState(init.zoom || 1);
+      const [drawerOpen, setDrawerOpen] = useState(false);
+      const [pdfPreview, setPdfPreview] = useState(null); // {name, url}
       const current = pages[index];
 
       const [isMobile, setIsMobile] = useState(false);
@@ -102,14 +80,14 @@
         return () => window.removeEventListener("resize", onResize);
       }, []);
 
-      // 閲覧/編集
+      // 閲覧/編集（コンパクト統合）
       const [mode, setMode] = useState(() => {
         const stored = loadMode();
         if (stored === "view" || stored === "edit") return stored;
         return (window.innerWidth < 640) ? "view" : "edit";
       });
       const isView = mode === "view";
-      const toggleMode = () => { const m = isView ? "edit" : "view"; setMode(m); saveMode(m); };
+      const setModeBoth = (m) => { setMode(m); saveMode(m); };
 
       useEffect(() => { saveState({ pages, index, pdfs, pageSize, orientation, zoom }); }, [pages, index, pdfs, pageSize, orientation, zoom]);
 
@@ -153,15 +131,17 @@
       const prev = () => setIndex(i => Math.max(0, i-1));
       const next = () => setIndex(i => Math.min(pages.length-1, i+1));
 
-      // PDF
+      // PDF（簡易プレビュー）
       const fileInputRef = useRef(null);
       const addPdf = (e) => {
         if (isView) return;
         const f = e.target.files?.[0]; if (!f) return;
-        const item = { id: uuid(), name: f.name, addedAt: Date.now() };
+        const url = URL.createObjectURL(f);
+        const item = { id: uuid(), name: f.name, url, addedAt: Date.now() };
         setPdfs(lst => [item, ...lst]); e.target.value = "";
       };
       const removePdf = (id) => { if (isView) return; setPdfs(lst => lst.filter(x => x.id !== id)); };
+      const openPdf = (item) => setPdfPreview(item);
 
       // ノート更新
       const updatePage = (patch) => {
@@ -228,13 +208,12 @@
 
       // 印刷/ズーム
       const pageDims = (ps, orient) => {
-        let map = { a4:[210,297], b5:[182,257], letter:[216,279], a5:[148,210] };
+        let map = { a4:[210,297], b5:[182,257], a5:[148,210], letter:[216,279] };
         let [w,h] = map[ps] || map.a4;
         if (orient === "landscape") [w,h] = [h,w];
         return { wmm:w, hmm:h };
       };
       const doPrint = () => {
-        const dim = pageDims(pageSize, orientation);
         const styleId = "print-style";
         let st = document.getElementById(styleId);
         const orient = orientation === "landscape" ? " landscape" : "";
@@ -250,23 +229,15 @@
       const disableStyleSelect = hasInput || isView;
 
       const dim = pageDims(pageSize, orientation);
-      const outerStyle = {
-        width:  `${dim.wmm * PX_PER_MM * zoom}px`,
-        minHeight: `${dim.hmm * PX_PER_MM * zoom}px`,
-        margin: "0 auto",
-        overflow: "auto"
-      };
-      const pageStyle = {
-        width:  `${dim.wmm}mm`,
-        minHeight: `${dim.hmm}mm`,
-        transform: `scale(${zoom})`
-      };
+      const pageWidthPx  = dim.wmm * PX_PER_MM * zoom;
+      const pageHeightPx = dim.hmm * PX_PER_MM * zoom;
 
       return (
         <div className="w-full min-h-screen bg-neutral-50">
-          {/* 上部バー */}
-          <div className="sticky top-0 z-40 bg-white/80 backdrop-blur border-b no-print">
-            <div className="max-w-5xl mx-auto px-3 py-2 flex items-center gap-2">
+          {/* ヘッダー（コンパクト） */}
+          <div className="sticky top-0 z-40 bg-white/90 backdrop-blur border-b no-print">
+            <div className="max-w-6xl mx-auto px-3 py-2 flex items-center gap-2">
+              <button className="px-2 py-1 rounded border" onClick={()=>setDrawerOpen(true)}>☰</button>
               <div className="font-semibold text-neutral-700">Note Link <span className="text-xs text-neutral-500">{VERSION}</span></div>
               <div className="flex items-center gap-2 ml-2">
                 <button className="px-2 py-1 rounded border" onClick={prev}>◀</button>
@@ -274,46 +245,84 @@
                 <button className="px-2 py-1 rounded border" onClick={next}>▶</button>
               </div>
               <div className="flex-1" />
-              <span className={"chip " + (isView ? "chip-view" : "chip-edit")}>{isView ? "閲覧モード" : "編集モード"}</span>
-              <button className="ml-2 px-2 py-1 rounded border" onClick={toggleMode}>
-                {isView ? "編集へ切替" : "閲覧へ切替"}
-              </button>
-
-              <div className="flex items-center gap-2 ml-2">
-                <label className="text-sm text-neutral-600">用紙</label>
-                <select className="px-2 py-1 border rounded" value={pageSize} onChange={(e)=>setPageSize(e.target.value)}>
-                  <option value="a4">A4</option>
-                  <option value="b5">B5</option>
-                  <option value="a5">A5</option>
-                  <option value="letter">Letter</option>
-                </select>
-                <select className="px-2 py-1 border rounded" value={orientation} onChange={(e)=>setOrientation(e.target.value)}>
-                  <option value="portrait">縦</option>
-                  <option value="landscape">横</option>
-                </select>
-                <label className="text-sm text-neutral-600 ml-2">ズーム</label>
-                <select className="px-2 py-1 border rounded" value={String(zoom)} onChange={(e)=>setZoom(Number(e.target.value))}>
-                  <option value="0.75">75%</option>
-                  <option value="1">100%</option>
-                  <option value="1.25">125%</option>
-                  <option value="1.5">150%</option>
-                  <option value="2">200%</option>
-                </select>
-                <button className="px-2 py-1 rounded border" onClick={doPrint}>印刷（PDF保存）</button>
-
-                <input type="file" accept="application/pdf" className="hidden" ref={fileInputRef} onChange={addPdf} />
-                <button className="px-2 py-1 rounded border btn" onClick={() => !isView && fileInputRef.current?.click()} disabled={isView}>PDF追加</button>
-                <button className="px-2 py-1 rounded border btn" onClick={() => isView ? null : alert('ローカル保存（デモ）完了')} disabled={isView}>保存</button>
-                <button className="px-2 py-1 rounded bg-black text-white">共有</button>
+              {/* 閲覧/編集：統合スイッチ */}
+              <div className="inline-flex rounded-lg border overflow-hidden">
+                <button className={"px-3 py-1 text-sm " + (isView ? "bg-black text-white":"bg-white")} onClick={()=>setModeBoth("view")}>閲覧</button>
+                <button className={"px-3 py-1 text-sm " + (!isView ? "bg-black text-white":"bg-white")} onClick={()=>setModeBoth("edit")}>編集</button>
               </div>
             </div>
           </div>
 
+          {/* 左ドロワー */}
+          {drawerOpen && (
+            <div className="fixed inset-0 z-50 flex">
+              <div className="w-80 h-full bg-white border-r shadow-xl p-3 overflow-y-auto drawer-open transition-transform no-print">
+                <div className="flex items-center justify-between mb-2">
+                  <div className="font-medium">ツール</div>
+                  <button className="px-2 py-1 rounded border" onClick={()=>setDrawerOpen(false)}>閉じる</button>
+                </div>
+
+                <div className="mb-4">
+                  <div className="text-sm text-neutral-600 mb-1">用紙・印刷</div>
+                  <div className="flex gap-2 mb-2">
+                    <select className="px-2 py-1 border rounded flex-1" value={pageSize} onChange={(e)=>setPageSize(e.target.value)}>
+                      <option value="a4">A4</option><option value="b5">B5</option><option value="a5">A5</option><option value="letter">Letter</option>
+                    </select>
+                    <select className="px-2 py-1 border rounded" value={orientation} onChange={(e)=>setOrientation(e.target.value)}>
+                      <option value="portrait">縦</option><option value="landscape">横</option>
+                    </select>
+                  </div>
+                  <div className="flex items-center gap-2 mb-2">
+                    <label className="text-sm text-neutral-600">ズーム</label>
+                    <select className="px-2 py-1 border rounded" value={String(zoom)} onChange={(e)=>setZoom(Number(e.target.value))}>
+                      <option value="0.75">75%</option><option value="1">100%</option><option value="1.25">125%</option><option value="1.5">150%</option><option value="2">200%</option>
+                    </select>
+                  </div>
+                  <button className="px-2 py-1 rounded border w-full" onClick={doPrint}>印刷（PDF保存）</button>
+                </div>
+
+                <div className="mb-4">
+                  <div className="text-sm text-neutral-600 mb-1">PDF ライブラリ</div>
+                  <div className="flex gap-2 mb-2">
+                    <input type="file" accept="application/pdf" className="hidden" ref={fileInputRef} onChange={addPdf} />
+                    <button className="px-2 py-1 rounded border flex-1 btn" onClick={()=> !isView && fileInputRef.current?.click()} disabled={isView}>PDF追加</button>
+                  </div>
+                  <ul className="space-y-2 max-h-[40vh] overflow-auto">
+                    {pdfs.length === 0 && (<li className="text-sm text-neutral-500">まだPDFがありません。</li>)}
+                    {pdfs.map(p => (
+                      <li key={p.id} className="flex items-center justify-between text-sm border rounded px-2 py-1">
+                        <span className="truncate mr-2" title={p.name}>{p.name}</span>
+                        <div className="flex gap-1">
+                          <button className="px-2 py-1 rounded border" onClick={()=>openPdf(p)}>開く</button>
+                          <button className="px-2 py-1 rounded border btn" onClick={()=>removePdf(p.id)} disabled={isView}>削除</button>
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              </div>
+              <div className="flex-1 bg-black/30" onClick={()=>setDrawerOpen(false)}></div>
+            </div>
+          )}
+
+          {/* PDFプレビューモーダル */}
+          {pdfPreview && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center">
+              <div className="absolute inset-0 bg-black/50" onClick={()=>setPdfPreview(null)}></div>
+              <div className="relative bg-white w-[90vw] h-[85vh] rounded shadow-xl p-2">
+                <div className="flex items-center justify-between mb-2">
+                  <div className="font-medium truncate">{pdfPreview.name}</div>
+                  <button className="px-2 py-1 rounded border" onClick={()=>setPdfPreview(null)}>閉じる</button>
+                </div>
+                <iframe src={pdfPreview.url} className="w-full h-[calc(85vh-48px)] border rounded"></iframe>
+              </div>
+            </div>
+          )}
+
           {/* 本体 */}
-          <div className="max-w-5xl mx-auto p-3 grid grid-cols-1 gap-3">
-            {/* ノートページ */}
-            <div className="border rounded-xl shadow-sm" style={outerStyle}>
-              <div className="page page-zoom p-3 sm:p-4" style={pageStyle}>
+          <div className="max-w-6xl mx-auto p-3 grid grid-cols-1 gap-3">
+            <div className="bg-white border rounded-xl shadow-sm" style={{ width: pageWidthPx + 32, margin: "0 auto" }}>
+              <div className="p-3 sm:p-4">
                 {/* タイトル行 */}
                 <div className="flex flex-col sm:flex-row gap-2 mb-3">
                   <input
@@ -339,9 +348,7 @@
 
                   <div className="w-px h-5 bg-neutral-200 mx-1"></div>
                   <label className="text-sm text-neutral-600">付箋サイズ</label>
-                  <select className="px-2 py-1 border rounded" value={defaultSticky} onChange={(e)=>setDefaultSticky(e.target.value)} disabled={isView}>
-                    <option value="S">S</option><option value="M">M</option><option value="L">L</option>
-                  </select>
+                  <select className="px-2 py-1 border rounded" value={"M"} onChange={()=>{}} disabled>（左ツール）</select>
                   <button className="px-2 py-1 rounded border btn" onClick={addSticky} disabled={isView}>付箋</button>
 
                   <div className="w-px h-5 bg-neutral-200 mx-1"></div>
@@ -382,10 +389,11 @@
                 </div>
 
                 {/* エディタ＋付箋レイヤ */}
-                <div className="relative border rounded-xl overflow-hidden min-h-[60vh]">
-                  <div className="absolute inset-0 pointer-events-none" style={gridOverlay}></div>
+                <div className="relative border rounded-xl overflow-hidden" style={{ width: pageWidthPx, height: pageHeightPx }}>
+                  <div className="absolute inset-0 pointer-events-none" style={{...gridOverlay, zIndex:5}}></div>
 
-                  <div id="notesLayer" className="absolute inset-0" style={{ pointerEvents: isView ? "none":"auto" }}>
+                  {/* 付箋 */}
+                  <div id="notesLayer" className="absolute inset-0 z-20" style={{ pointerEvents: isView ? "none" : "auto" }}>
                     {(current.notes||[]).map(note => (
                       <Sticky key={note.id}
                               note={note}
@@ -396,42 +404,32 @@
                     ))}
                   </div>
 
+                  {/* テキスト */}
                   <textarea
                     ref={taRef}
                     value={current.content}
                     onChange={(e)=> !isView && setPages(prev => prev.map((p,i)=> i===index? {...p, content:e.target.value}:p))}
                     placeholder="ここにノートを書き始める…（閲覧モードでは編集できません）"
-                    className="w-full h-[60vh] p-3 text-base bg-white"
+                    className="absolute inset-0 w-full h-full p-3 text-base bg-white z-10"
                     style={ruledBg}
                     readOnly={isView}
                   ></textarea>
                 </div>
               </div>
             </div>
-
-            {/* サイドバー（簡易） */}
-            <div className="bg-white border rounded-xl shadow-sm p-3">
-              <div className="font-medium mb-2">PDFライブラリ（保管・管理 叩き台）</div>
-              <ul className="space-y-2 max-h-[40vh] overflow-auto">
-                {pdfs.length === 0 && (<li className="text-sm text-neutral-500">まだPDFがありません。「PDF追加」から登録してください。</li>)}
-                {pdfs.map(p => (
-                  <li key={p.id} className="flex items-center justify-between text-sm border rounded px-2 py-1">
-                    <span className="truncate" title={p.name}>{p.name}</span>
-                    <button className="px-2 py-1 rounded border btn" onClick={()=>removePdf(p.id)} disabled={isView}>削除</button>
-                  </li>
-                ))}
-              </ul>
-            </div>
           </div>
 
           {/* モバイル下部 */}
           <div className="sm:hidden sticky bottom-0 z-40 bg-white/90 backdrop-blur border-t no-print">
-            <div className="max-w-5xl mx-auto px-3 py-2 flex items-center gap-2">
+            <div className="max-w-6xl mx-auto px-3 py-2 flex items-center gap-2">
               <button className="px-2 py-1 rounded border" onClick={prev}>◀</button>
               <div className="text-sm text-neutral-600">ページ {index + 1} / {pages.length}</div>
               <button className="px-2 py-1 rounded border" onClick={next}>▶</button>
               <div className="flex-1"></div>
-              <button className="px-3 py-1 rounded bg-black text-white">共有</button>
+              <div className="inline-flex rounded-lg border overflow-hidden">
+                <button className={"px-3 py-1 text-sm " + (isView ? "bg-black text-white":"bg-white")} onClick={()=>setModeBoth("view")}>閲覧</button>
+                <button className={"px-3 py-1 text-sm " + (!isView ? "bg-black text-white":"bg-white")} onClick={()=>setModeBoth("edit")}>編集</button>
+              </div>
             </div>
           </div>
         </div>
