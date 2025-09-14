@@ -3,13 +3,15 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Note Link v0.6.3c – No-CDN（左ツール／PDF修正／保存拡張）</title>
+<title>Note Link v0.6.3d – No-CDN（付箋復活／ペン保持／レイヤ修正／左ツール開閉）</title>
 <style>
   :root{--border:#e5e7eb;--muted:#6b7280;--bg:#f8fafc}
   *{box-sizing:border-box} html,body{height:100%} body{margin:0;background:var(--bg);font-family:ui-sans-serif,system-ui,Segoe UI,Roboto}
-  .app{display:grid;grid-template-columns:280px 1fr;grid-template-rows:auto 1fr;min-height:100vh}
+  #app{display:grid;grid-template-columns:280px 1fr;grid-template-rows:auto 1fr;min-height:100vh}
+  #app.collapsed{grid-template-columns:1fr}
   .top{grid-column:1/3;display:flex;align-items:center;gap:8px;padding:8px 12px;border-bottom:1px solid var(--border);background:#fff;position:sticky;top:0;z-index:20}
-  .sidebar{grid-row:2/3;background:#fff;border-right:1px solid var(--border);padding:10px;overflow:auto}
+  .sidebar{grid-row:2/3;background:#fff;border-right:1px solid var(--border);padding:10px;overflow:auto;display:block}
+  #app.collapsed .sidebar{display:none}
   .main{grid-row:2/3;padding:12px}
   .btn{border:1px solid var(--border);background:#fff;padding:6px 10px;border-radius:8px;cursor:pointer}
   .btn[disabled]{opacity:.5;cursor:not-allowed}
@@ -18,9 +20,11 @@
   .sep{height:1px;background:var(--border);margin:10px 0}
   .panel{background:#fff;border:1px solid var(--border);border-radius:14px;box-shadow:0 2px 10px rgba(0,0,0,.04)}
   .page{position:relative;overflow:hidden;margin:12px auto;border:1px solid var(--border);border-radius:14px;background:#fff}
-  .notearea{position:absolute;inset:0;width:100%;height:100%;padding:12px;border:0;background:transparent;resize:none}
-  .gridOverlay{position:absolute;inset:0;pointer-events:none}
-  .penLayer{position:absolute;inset:0;touch-action:none}
+  .notearea{position:absolute;inset:0;width:100%;height:100%;padding:12px;border:0;background:transparent;resize:none;z-index:1}
+  .gridOverlay{position:absolute;inset:0;pointer-events:none;z-index:0}
+  /* ↓ z-index は JS でツールに応じて切替（pen最前面 or overlay最前面） */
+  #overlay{position:absolute;inset:0;z-index:2}
+  #penLayer{position:absolute;inset:0;touch-action:none;z-index:3}
   .sticky{position:absolute;background:#fef3c7;border:1px solid #f59e0b;border-radius:8px;box-shadow:0 2px 10px rgba(0,0,0,.08);resize:both;overflow:auto}
   .sticky header{cursor:move;padding:4px 8px;background:rgba(0,0,0,.08);display:flex;gap:6px;align-items:center}
   .sticky header input{flex:1;border:0;background:transparent;font-weight:600}
@@ -31,21 +35,13 @@
   .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
   .title{padding:12px}
   .tools button.active{background:#111827;color:#fff}
-  .overlayShade{position:fixed;inset:0;background:rgba(0,0,0,.35);display:none;z-index:30}
-  .drawerBtn{display:none}
-  @media (max-width: 900px){
-    .app{grid-template-columns:1fr}
-    .sidebar{position:fixed;z-index:40;inset:0 30% 0 0;display:none}
-    .sidebar.open{display:block}
-    .drawerBtn{display:inline-block}
-  }
 </style>
 </head>
 <body>
-<div class="app">
+<div id="app">
   <div class="top">
-    <button class="btn drawerBtn" id="openDrawer">☰</button>
-    <span style="font-weight:600">Note Link <span class="chip">v0.6.3c No-CDN</span></span>
+    <button class="btn" id="toggleSidebar">≡</button>
+    <span style="font-weight:600">Note Link <span class="chip">v0.6.3d No-CDN</span></span>
     <div class="group" style="margin-left:auto">
       <button class="btn" id="prevBtn">◀</button>
       <span id="pageInfo" class="chip">ページ 1/1</span>
@@ -67,6 +63,7 @@
       <button class="btn" data-tool="pen">ペン</button>
       <button class="btn" data-tool="marker">マーカー</button>
       <button class="btn" data-tool="eraser">消しゴム</button>
+      <button class="btn" id="addSticky">付箋</button>
     </div>
 
     <div class="row">
@@ -101,13 +98,9 @@
     <div id="pdfList" style="max-height:40vh;overflow:auto"></div>
 
     <div class="sep"></div>
-    <div class="row"><span class="chip">保存/読込</span></div>
     <div class="row"><span class="chip" title="端末とブラウザごとに保存されます">保存先：このブラウザ（localStorage）</span></div>
     <div class="row"><button class="btn" id="saveBtn">保存（ブラウザ）</button><button class="btn" id="loadBtn">読込（ブラウザ）</button></div>
     <div class="row"><button class="btn" id="exportBtn">エクスポート（JSON）</button><input type="file" id="importInput" accept="application/json" class="btn" style="width:180px"></div>
-
-    <div class="sep"></div>
-    <div class="row"><button class="btn" id="closeDrawer" style="display:none">閉じる</button></div>
   </div>
 
   <div class="main">
@@ -115,48 +108,44 @@
       <div class="title"><input id="titleInput" class="btn" style="width:100%;padding:10px" placeholder="タイトル"></div>
       <div class="page" id="page" style="width:840px;height:1188px">
         <div id="gridOverlay" class="gridOverlay"></div>
-        <canvas id="penLayer" class="penLayer"></canvas>
         <div id="overlay"></div>
+        <canvas id="penLayer"></canvas>
         <textarea id="content" class="notearea" placeholder="ここにノートを書き始める…"></textarea>
       </div>
     </div>
   </div>
 </div>
 
-<div class="overlayShade" id="shade"></div>
-
 <script>
 (function(){
-  const STORAGE='notelink.nocdn.v063c';
+  const STORAGE='notelink.nocdn.v063d';
   const $=sel=>document.querySelector(sel);
+  const app=$('#app');
   const el={
     page:$('#page'), overlay:$('#overlay'), grid:$('#gridOverlay'), pen:$('#penLayer'),
     content:$('#content'), title:$('#titleInput'), info:$('#pageInfo'),
     lineType:$('#lineType'), lineGap:$('#lineGap'), gridToggle:$('#gridToggle'), gridSize:$('#gridSize'),
     paper:$('#paper'), orient:$('#orient'), printBtn:$('#printBtn'),
     addPage:$('#addPage'), delPage:$('#delPage'), prev:$('#prevBtn'), next:$('#nextBtn'),
-    sidebar:$('#sidebar'), shade:$('#shade'), openDrawer:$('#openDrawer'), closeDrawer:$('#closeDrawer'),
     pdfInput:$('#pdfInput'), pdfList:$('#pdfList'),
     toolButtons:[...document.querySelectorAll('[data-tool]')], penWidth:$('#penWidth'), penColor:$('#penColor'),
-    addSticky:null, gridBlock:$('#gridBlock'),
+    addSticky:$('#addSticky'), gridBlock:$('#gridBlock'),
     viewBtn:$('#viewBtn'), editBtn:$('#editBtn'),
     saveBtn:$('#saveBtn'), loadBtn:$('#loadBtn'),
-    exportBtn:$('#exportBtn'), importInput:$('#importInput')
+    exportBtn:$('#exportBtn'), importInput:$('#importInput'),
+    toggleSidebar:$('#toggleSidebar'), sidebar:$('#sidebar')
   };
   const PX_PER_MM=3.78;
   function mmToPx(mm){return mm*PX_PER_MM;}
   function dims(ps,ori){ const m={a4:[210,297],b5:[182,257],a5:[148,210],letter:[216,279]}; let [w,h]=m[ps]||m.a4; if(ori==='landscape') [w,h]=[h,w]; return [w*PX_PER_MM,h*PX_PER_MM]; }
-  const state={pages:[{id:u(),kind:'note',title:'',content:'',style:{lineType:'ruled',ruledSpacingMm:10,gridEnabled:false,gridSizeMm:10},notes:[],blocks:[]}],index:0,pageSize:'a4',orientation:'portrait'};
+
+  // state（ink: ペン画像のdataURLを保持）
+  const state={pages:[{id:u(),kind:'note',title:'',content:'',style:{lineType:'ruled',ruledSpacingMm:10,gridEnabled:false,gridSizeMm:10},notes:[],blocks:[],ink:''}],index:0,pageSize:'a4',orientation:'portrait'};
   try{ const s=JSON.parse(localStorage.getItem(STORAGE)||''); if(s) Object.assign(state,s);}catch{}
   let tool='select', mode='edit';
 
-  /* Drawer for mobile */
-  function openDrawer(){ el.sidebar.classList.add('open'); el.shade.style.display='block'; el.closeDrawer.style.display='inline-block'; document.body.style.overflow='hidden';}
-  function closeDrawer(){ el.sidebar.classList.remove('open'); el.shade.style.display='none'; el.closeDrawer.style.display='none'; document.body.style.overflow='';}
-  el.openDrawer.addEventListener('click',openDrawer);
-  el.closeDrawer.addEventListener('click',closeDrawer);
-  el.shade.addEventListener('click',closeDrawer);
-  document.addEventListener('keydown',e=>{ if(e.key==='Escape') closeDrawer(); });
+  // sidebar toggle（PCでも開閉）
+  el.toggleSidebar.addEventListener('click',()=>{ app.classList.toggle('collapsed'); });
 
   function render(){
     const pg=state.pages[state.index];
@@ -165,9 +154,12 @@
     el.lineType.value=pg.style.lineType||'ruled'; el.lineGap.value=pg.style.ruledSpacingMm||10;
     el.gridSize.value=pg.style.gridSizeMm||10;
     el.gridToggle.textContent='グラフ升目 '+(pg.style.gridEnabled?'ON':'OFF');
-    const [W,H]=dims(state.pageSize,state.orientation); el.page.style.width=W+'px'; el.page.style.height=H+'px';
 
-    // ruled background
+    // 用紙サイズ
+    const [W,H]=dims(state.pageSize,state.orientation);
+    el.page.style.width=W+'px'; el.page.style.height=H+'px';
+
+    // 罫線（背景）
     const gapPx = mmToPx(pg.style.ruledSpacingMm||10);
     if(pg.style.lineType==='ruled'){
       el.content.style.backgroundImage='repeating-linear-gradient(to bottom, rgba(0,0,0,0.08) 0, rgba(0,0,0,0.08) 1px, transparent 1px, transparent '+gapPx+'px)';
@@ -176,79 +168,109 @@
       el.content.style.backgroundImage='none'; el.content.style.lineHeight='24px';
     }
 
-    // grid overlay
+    // グリッド（最背面）
     el.grid.style.backgroundImage= pg.style.gridEnabled?
-      'linear-gradient(rgba(0,0,0,0.1) 1px, transparent 1px), linear-gradient(90deg, rgba(0,0,0,0.1) 1px, transparent 1px)':'none';
+      'linear-gradient(rgba(0,0,0,0.1) 1px, transparent 1px), linear-gradient(90deg, rgba(0,0,0,0.1) 1px, transparent 1px)' : 'none';
     el.grid.style.backgroundSize = mmToPx(pg.style.gridSizeMm||10)+'px '+mmToPx(pg.style.gridSizeMm||10)+'px';
 
-    // canvas size & pointer
-    el.pen.width=el.page.clientWidth; el.pen.height=el.page.clientHeight;
-    el.pen.style.pointerEvents=(mode==='edit' && ['pen','marker','eraser'].includes(tool))?'auto':'none';
-    el.content.readOnly=(mode!=='edit'); el.content.style.pointerEvents=(mode==='edit' && tool==='text')?'auto':'none';
+    // キャンバスサイズは**必要時のみ**更新（更新すると消えるため）
+    const w=Math.round(el.page.clientWidth), h=Math.round(el.page.clientHeight);
+    if(el.pen.width!==w || el.pen.height!==h){
+      const temp=document.createElement('canvas'); temp.width=el.pen.width; temp.height=el.pen.height;
+      temp.getContext('2d').drawImage(el.pen,0,0);
+      el.pen.width=w; el.pen.height=h;
+      el.pen.getContext('2d').drawImage(temp,0,0,w,h);
+      if(temp.width && temp.height) saveInk();  // ペン画像を保持
+    }
 
-    // overlay objects
+    // レイヤ順（描画ツール中はペン最前面／それ以外はオーバーレイ最前面）
+    const drawingMode=['pen','marker','eraser'].includes(tool) && mode==='edit';
+    el.pen.style.zIndex = drawingMode ? '5' : '3';
+    el.overlay.style.zIndex = drawingMode ? '2' : '5';
+
+    // テキスト入力のON/OFF
+    el.pen.style.pointerEvents = drawingMode ? 'auto' : 'none';
+    el.content.readOnly = (mode!=='edit');
+    el.content.style.pointerEvents = (mode==='edit' && tool==='text') ? 'auto' : 'none';
+
+    // 既存のペン画像（ink）を描画
+    if(pg.ink){
+      const im=new Image();
+      im.onload=()=>{ const c=el.pen.getContext('2d'); c.drawImage(im,0,0,el.pen.width,el.pen.height); };
+      im.src=pg.ink;
+    }
+
+    // オーバーレイ（PDF/グリッド/付箋）
     el.overlay.innerHTML='';
     (pg.blocks||[]).forEach(b=>addBlockEl(b));
     (pg.notes||[]).forEach(n=>addStickyEl(n));
   }
 
-  // top nav
+  // ナビ
   $('#prevBtn').addEventListener('click',()=>{ state.index=Math.max(0,state.index-1); render(); });
   $('#nextBtn').addEventListener('click',()=>{ state.index=Math.min(state.pages.length-1,state.index+1); render(); });
 
-  // page ops
-  $('#addPage').addEventListener('click',()=>{ if(mode!=='edit') return; const cur=state.pages[state.index]; const n={id:u(),kind:'note',title:cur.title||'',content:'',style:{lineType:cur.style.lineType,ruledSpacingMm:cur.style.ruledSpacingMm,gridEnabled:false,gridSizeMm:cur.style.gridSizeMm},notes:[],blocks:[]}; state.pages.push(n); state.index=state.pages.length-1; save(); render(); });
-  $('#delPage').addEventListener('click',()=>{ if(mode!=='edit') return; if(state.pages.length<=1){alert('最後のページは削除できません');return;} if(!confirm('このページを削除しますか？')) return; state.pages.splice(state.index,1); state.index=Math.max(0,state.index-1); save(); render(); });
+  // ページ操作
+  $('#addPage').addEventListener('click',()=>{ if(mode!=='edit') return;
+    const cur=state.pages[state.index];
+    const n={id:u(),kind:'note',title:cur.title||'',content:'',style:{lineType:cur.style.lineType,ruledSpacingMm:cur.style.ruledSpacingMm,gridEnabled:false,gridSizeMm:cur.style.gridSizeMm},notes:[],blocks:[],ink:''};
+    state.pages.push(n); state.index=state.pages.length-1; save(); render();
+  });
+  $('#delPage').addEventListener('click',()=>{ if(mode!=='edit') return;
+    if(state.pages.length<=1){alert('最後のページは削除できません');return;}
+    if(!confirm('このページを削除しますか？')) return;
+    state.pages.splice(state.index,1); state.index=Math.max(0,state.index-1); save(); render();
+  });
 
-  // mode/tools
-  function setTool(t){ tool=t; document.querySelectorAll('[data-tool]').forEach(b=>{ b.classList.toggle('active', b.dataset.tool===t); }); render(); }
+  // モード／ツール
+  function setTool(t){ tool=t; document.querySelectorAll('[data-tool]').forEach(b=>b.classList.toggle('active', b.dataset.tool===t)); render(); }
   document.querySelectorAll('[data-tool]').forEach(b=>b.addEventListener('click',()=>setTool(b.dataset.tool)));
   el.viewBtn.addEventListener('click',()=>{mode='view'; el.viewBtn.style.background='#111827'; el.viewBtn.style.color='#fff'; el.editBtn.style.background='#fff'; el.editBtn.style.color='#111827'; render();});
   el.editBtn.addEventListener('click',()=>{mode='edit'; el.editBtn.style.background='#111827'; el.editBtn.style.color='#fff'; el.viewBtn.style.background='#fff'; el.viewBtn.style.color='#111827'; render();});
 
-  // inputs
-  el.title.addEventListener('input',()=>{ state.pages[state.index].title=el.title.value; save(); });
-  el.content.addEventListener('input',()=>{ state.pages[state.index].content=el.content.value; save(); });
-  el.lineType.addEventListener('change',()=>{ state.pages[state.index].style.lineType=el.lineType.value; save(); render(); });
-  el.lineGap.addEventListener('change',()=>{ const cur=state.pages[state.index]; if((cur.content||'').length>0 && cur.style.lineType!=='none'){ alert('入力開始後は罫線幅は固定です'); el.lineGap.value=cur.style.ruledSpacingMm; return; } cur.style.ruledSpacingMm=Number(el.lineGap.value); save(); render(); });
-  el.gridToggle.addEventListener('click',()=>{ const st=state.pages[state.index].style; st.gridEnabled=!st.gridEnabled; save(); render(); });
-  el.gridSize.addEventListener('change',()=>{ state.pages[state.index].style.gridSizeMm=Number(el.gridSize.value); save(); render(); });
+  // 入力
+  el.title.addEventListener('input',()=>{ cur().title=el.title.value; save(); });
+  el.content.addEventListener('input',()=>{ cur().content=el.content.value; save(); });
+  el.lineType.addEventListener('change',()=>{ cur().style.lineType=el.lineType.value; save(); render(); });
+  el.lineGap.addEventListener('change',()=>{ const c=cur(); if((c.content||'').length>0 && c.style.lineType!=='none'){ alert('入力開始後は罫線幅は固定です'); el.lineGap.value=c.style.ruledSpacingMm; return; } c.style.ruledSpacingMm=Number(el.lineGap.value); save(); render(); });
+  el.gridToggle.addEventListener('click',()=>{ cur().style.gridEnabled=!cur().style.gridEnabled; save(); render(); });
+  el.gridSize.addEventListener('change',()=>{ cur().style.gridSizeMm=Number(el.gridSize.value); save(); render(); });
 
-  // paper/orientation/print
+  // 用紙／印刷
   el.paper.value=state.pageSize; el.orient.value=state.orientation;
   el.paper.addEventListener('change',()=>{ state.pageSize=el.paper.value; save(); render(); });
   el.orient.addEventListener('change',()=>{ state.orientation=el.orient.value; save(); render(); });
-  el.printBtn.addEventListener('click',()=>{ const styleId='print-style'; let st=document.getElementById(styleId); const orient=state.orientation==='landscape'?' landscape':''; const css='@page { size: '+el.paper.value.toUpperCase()+orient+'; margin:10mm; }'; if(!st){st=document.createElement('style'); st.id=styleId; document.head.appendChild(st);} st.textContent=css; window.print(); });
+  el.printBtn.addEventListener('click',()=>{ const styleId='print-style'; let st=document.getElementById(styleId);
+    const orient=state.orientation==='landscape'?' landscape':''; const css='@page { size: '+el.paper.value.toUpperCase()+orient+'; margin:10mm; }';
+    if(!st){st=document.createElement('style'); st.id=styleId; document.head.appendChild(st);} st.textContent=css; window.print();
+  });
 
-  // save/load/export/import
+  // 保存系
   function save(){ localStorage.setItem(STORAGE, JSON.stringify(state)); }
   el.saveBtn.addEventListener('click',()=>{ save(); alert('保存しました（この端末・このブラウザ）'); });
   el.loadBtn.addEventListener('click',()=>{ try{ const s=JSON.parse(localStorage.getItem(STORAGE)||''); if(!s) return alert('保存が見つかりません'); Object.assign(state,s); render(); alert('読み込みました'); }catch{ alert('読み込みに失敗しました'); } });
   el.exportBtn.addEventListener('click',()=>{ const blob=new Blob([JSON.stringify(state)],{type:'application/json'}); const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='notelink_backup.json'; a.click(); setTimeout(()=>URL.revokeObjectURL(a.href),5000); });
-  el.importInput.addEventListener('change',e=>{ const f=e.target.files&&e.target.files[0]; if(!f) return; const r=new FileReader(); r.onload=()=>{ try{ const data=JSON.parse(r.result); Object.assign(state,data); save(); render(); alert('インポートしました'); }catch{ alert('JSONの読み込みに失敗しました'); } }; r.readAsText(f); e.target.value=''; });
+  el.importInput.addEventListener('change',e=>{ const f=e.target.files&&e.target.files[0]; if(!f) return; const r=new FileReader(); r.onload=()=>{ try{ const data=JSON.parse(r.result); Object.assign(state,data); save(); render(); alert('インポートしました'); }catch{ alert('JSON読み込みに失敗'); } }; r.readAsText(f); e.target.value=''; });
 
   // PDF
-  el.pdfInput.addEventListener('change', (e)=>{
-    const f=e.target.files&&e.target.files[0]; if(!f) return;
-    const url=URL.createObjectURL(f); const item={id:u(),name:f.name,url};
-    addPdfItem(item); e.target.value="";
-  });
+  el.pdfInput.addEventListener('change',(e)=>{ const f=e.target.files&&e.target.files[0]; if(!f) return; const url=URL.createObjectURL(f); addPdfItem({id:u(),name:f.name,url}); e.target.value=""; });
   function addPdfItem(item){
     const row=document.createElement('div'); row.className='row'; row.innerHTML=`<span class="badge" title="${item.name}">${short(item.name,18)}</span>`;
     row.append(btn('開く',()=>window.open(item.url,'_blank')));
-    row.append(btn('新規ページ',()=>{ const p={id:u(),kind:'pdf',title:item.name,url:item.url,style:{},notes:[],blocks:[]}; state.pages.push(p); state.index=state.pages.length-1; save(); render(); }));
-    row.append(btn('貼り込む',()=>{ if(mode!=='edit'){ alert('貼り込むには「編集」に切り替えてください'); mode='edit'; el.editBtn.click(); } const [W,H]=dims(state.pageSize,state.orientation); const b={id:u(),kind:'pdf',x:30,y:60,w:W*0.6,h:H*0.6,url:item.url,name:item.name}; cur().blocks.push(b); save(); render(); }));
+    row.append(btn('新規ページ',()=>{ const p={id:u(),kind:'pdf',title:item.name,url:item.url,style:{},notes:[],blocks:[],ink:''}; state.pages.push(p); state.index=state.pages.length-1; save(); render(); }));
+    row.append(btn('貼り込む',()=>{ if(mode!=='edit'){ mode='edit'; el.editBtn.click(); } const [W,H]=dims(state.pageSize,state.orientation); const b={id:u(),kind:'pdf',x:30,y:60,w:W*0.6,h:H*0.6,url:item.url,name:item.name}; cur().blocks.push(b); save(); render(); }));
     el.pdfList.prepend(row);
   }
 
-  // grid block
-  el.gridBlock.addEventListener('click',()=>{
-    const [W,H]=dims(state.pageSize,state.orientation);
-    const b={id:u(),kind:'grid',x:40,y:40,w:W/2,h:H/2,gridPx:mmToPx(state.pages[state.index].style.gridSizeMm||10)};
-    cur().blocks.push(b); save(); render();
+  // グリッド貼り込み
+  el.gridBlock.addEventListener('click',()=>{ const [W,H]=dims(state.pageSize,state.orientation);
+    const b={id:u(),kind:'grid',x:40,y:40,w:W/2,h:H/2,gridPx:mmToPx(cur().style.gridSizeMm||10)}; cur().blocks.push(b); save(); render();
   });
 
-  // overlay elements
+  // 付箋
+  el.addSticky.addEventListener('click',()=>{ const n={id:u(),x:20,y:20,w:180,h:140,title:'付箋',text:''}; cur().notes.push(n); save(); render(); });
+
+  // オーバーレイ要素
   function cur(){ return state.pages[state.index]; }
   function addStickyEl(n){
     const div=document.createElement('div'); div.className='sticky'; div.style.left=n.x+'px'; div.style.top=n.y+'px'; div.style.width=n.w+'px'; div.style.height=n.h+'px';
@@ -293,24 +315,41 @@
     }
   }
 
-  // pen layer
+  // ペン（保存つき）
   const ctx=el.pen.getContext('2d'); let drawing=false,last=[0,0];
-  function resizeCanvas(){ el.pen.width=el.page.clientWidth; el.pen.height=el.page.clientHeight; }
-  resizeCanvas(); new ResizeObserver(resizeCanvas).observe(el.page);
-  function penPos(e){ const r=el.pen.getBoundingClientRect(); return [e.clientX-r.left, e.clientY-r.top]; }
-  el.pen.addEventListener('pointerdown',(e)=>{ if(mode!=='edit') return; if(!['pen','marker','eraser'].includes(tool)) return; e.preventDefault(); drawing=true; el.pen.setPointerCapture&&el.pen.setPointerCapture(e.pointerId); last=penPos(e); });
-  el.pen.addEventListener('pointermove',(e)=>{ if(!drawing) return; e.preventDefault(); const [x,y]=penPos(e); ctx.lineCap='round'; ctx.lineJoin='round'; ctx.lineWidth=Number(el.penWidth.value); const color=(tool==='marker')?'rgba(255,235,59,0.5)':el.penColor.value; if(tool==='eraser'){ ctx.globalCompositeOperation='destination-out'; ctx.strokeStyle='rgba(0,0,0,1)'; }else{ ctx.globalCompositeOperation='source-over'; ctx.strokeStyle=color; } ctx.beginPath(); ctx.moveTo(last[0],last[1]); ctx.lineTo(x,y); ctx.stroke(); last=[x,y]; });
-  function penEnd(){ drawing=false; }
-  el.pen.addEventListener('pointerup',penEnd); el.pen.addEventListener('pointercancel',penEnd);
+  function resizeCanvasIfNeeded(){ const w=Math.round(el.page.clientWidth), h=Math.round(el.page.clientHeight);
+    if(el.pen.width===w && el.pen.height===h) return;
+    const tmp=document.createElement('canvas'); tmp.width=el.pen.width; tmp.height=el.pen.height;
+    tmp.getContext('2d').drawImage(el.pen,0,0);
+    el.pen.width=w; el.pen.height=h;
+    ctx.drawImage(tmp,0,0,w,h);
+    saveInk();
+  }
+  new ResizeObserver(resizeCanvasIfNeeded).observe(el.page);
 
-  // data helpers
-  function save(){ localStorage.setItem(STORAGE, JSON.stringify(state)); }
+  function penPos(e){ const r=el.pen.getBoundingClientRect(); return [e.clientX-r.left, e.clientY-r.top]; }
+  el.pen.addEventListener('pointerdown',(e)=>{ if(mode!=='edit') return; if(!['pen','marker','eraser'].includes(tool)) return;
+    e.preventDefault(); drawing=true; el.pen.setPointerCapture&&el.pen.setPointerCapture(e.pointerId); last=penPos(e);
+  });
+  el.pen.addEventListener('pointermove',(e)=>{ if(!drawing) return; e.preventDefault(); const [x,y]=penPos(e);
+    ctx.lineCap='round'; ctx.lineJoin='round'; ctx.lineWidth=Number(el.penWidth.value);
+    const color=(tool==='marker')?'rgba(255,235,59,0.5)':el.penColor.value;
+    if(tool==='eraser'){ ctx.globalCompositeOperation='destination-out'; ctx.strokeStyle='rgba(0,0,0,1)'; }
+    else { ctx.globalCompositeOperation='source-over'; ctx.strokeStyle=color; }
+    ctx.beginPath(); ctx.moveTo(last[0],last[1]); ctx.lineTo(x,y); ctx.stroke(); last=[x,y];
+  });
+  function endDraw(){ if(!drawing) return; drawing=false; saveInk(); }
+  el.pen.addEventListener('pointerup',endDraw); el.pen.addEventListener('pointercancel',endDraw);
+
+  function saveInk(){ try{ cur().ink = el.pen.toDataURL('image/png'); save(); }catch{} }
+
+  // util
   function u(){ return Math.random().toString(36).slice(2,10); }
-  function short(s,n){ return s&&s.length>n? s.slice(0,n-1)+'…' : (s||''); }
+  function short(s,n){ return s && s.length>n ? s.slice(0,n-1)+'…' : (s||''); }
   function escapeHtml(s){ return (s||'').replace(/[&<>"']/g, m=>({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[m])); }
 
   render();
-})();</script>
-
+})();
+</script>
 </body>
 </html>
