@@ -3,18 +3,18 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Note Link v0.6.0 – 入力/付箋/ペン/PDF 安定版</title>
+  <title>Note Link v0.6.2 – 消しゴム安定/再DL</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
   <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
   <style>
     .btn:disabled{opacity:.5;cursor:not-allowed}
-    .chip{font-size:12px;padding:2px 8px;border-radius:999px;border:1px solid #ddd}
     .drawer{transition:transform .2s ease}
     .note{box-shadow:0 2px 10px rgba(0,0,0,.06);resize:both;overflow:auto}
     .note-header{cursor:move;user-select:none;background:rgba(0,0,0,.08)}
-    .badge{font-size:12px;padding:.2rem .5rem;border-radius:8px;border:1px solid #e5e7eb;background:#f9fafb}
+    .block{box-shadow:0 2px 10px rgba(0,0,0,.06);resize:both;overflow:hidden;background:white}
+    .block-header{cursor:move;user-select:none;background:rgba(0,0,0,.06)}
     .tool-active{background:#111827;color:#fff}
     @media print{.no-print{display:none!important}}
   </style>
@@ -25,20 +25,19 @@
   <script type="text/babel">
   const {useEffect,useMemo,useRef,useState} = React;
   const PX_PER_MM = 3.78;
-  const VERSION="v0.6.0";
-  const STORAGE="notelink.v0.6.0";
-  const MODEKEY="notelink.v0.6.0.mode";
+  const VERSION="v0.6.2";
+  const STORAGE="notelink.v0.6.x";
+  const MODEKEY="notelink.mode";
   const uid = ()=>Math.random().toString(36).slice(2,10);
 
-  // ---- Sticky ----
   function Sticky({note,isView,onHeaderDown,onDelete,onChange}){
     const [title,setTitle] = useState(note.title||"付箋");
     const [text,setText]   = useState(note.text||"");
     useEffect(()=>{setTitle(note.title||"付箋");setText(note.text||"");},[note.id]);
     useEffect(()=>{onChange(note.id,{title,text});},[title,text]);
     return (
-      <div className="note absolute bg-yellow-200 rounded" style={{left:note.x,top:note.y,width:note.w,height:note.h,zIndex:30}}>
-        <div className="note-header text-xs px-2 py-1 rounded-t flex items-center justify-between" onMouseDown={(e)=>!isView&&onHeaderDown(e,note)}>
+      <div className="note absolute bg-yellow-200 rounded" style={{left:note.x,top:note.y,width:note.w,height:note.h,zIndex:40}}>
+        <div className="note-header text-xs px-2 py-1 rounded-t flex items-center justify-between" onMouseDown={(e)=>!isView&&onHeaderDown(e,{id:note.id,type:'note'})}>
           <input className="bg-transparent outline-none font-medium w-full" value={title} onChange={e=>setTitle(e.target.value)} disabled={isView}/>
           <button className="text-xs px-1 border rounded ml-2 btn" onClick={()=>onDelete(note.id)} disabled={isView}>×</button>
         </div>
@@ -47,118 +46,201 @@
     );
   }
 
-  // ---- Pen Canvas ----
-  function PenLayer({active,color,width,isEraser,onStrokeEnd}){
+  function Block({block,isView,onHeaderDown,onDelete}){
+    return (
+      <div className="block absolute rounded bg-white" style={{left:block.x,top:block.y,width:block.w,height:block.h,zIndex:35}}>
+        <div className="block-header text-xs px-2 py-1 rounded-t flex items-center justify-between" onMouseDown={(e)=>!isView&&onHeaderDown(e,{id:block.id,type:'block'})}>
+          <div className="font-medium truncate">{block.kind==='grid'?'グリッド':(block.name||'PDF')}</div>
+          <button className="text-xs px-1 border rounded ml-2 btn" onClick={()=>onDelete(block.id)} disabled={isView}>×</button>
+        </div>
+        <div className="w-full h-[calc(100%-28px)]">
+          {block.kind==='grid' ? (
+            <div className="w-full h-full" style={{
+              backgroundImage: `linear-gradient(rgba(0,0,0,0.1) 1px, transparent 1px), linear-gradient(90deg, rgba(0,0,0,0.1) 1px, transparent 1px)`,
+              backgroundSize: `${block.gridPx||32}px ${block.gridPx||32}px`
+            }}></div>
+          ) : (
+            <object data={block.url} type="application/pdf" className="w-full h-full">
+              <embed src={block.url} type="application/pdf" className="w-full h-full"/>
+              <div className="p-2 text-sm">PDFプレビューに対応していないブラウザです。ダウンロードして開いてください。</div>
+            </object>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  // Pen canvas with robust eraser
+  function PenLayer({active,color,width,isEraser,onClear}){
     const ref = useRef(null);
     const drawing = useRef(false);
     const last = useRef([0,0]);
-    useEffect(()=>{
+    const useWhiteErase = useRef(false); // fallback mode
+
+    const setup = ()=>{
       const cvs = ref.current; if(!cvs) return;
-      const ctx = cvs.getContext('2d');
+      const ctx = cvs.getContext('2d',{willReadFrequently:true});
       const dpr = window.devicePixelRatio || 1;
-      const rect = cvs.getBoundingClientRect();
-      cvs.width = rect.width*dpr; cvs.height = rect.height*dpr;
+      const r = cvs.getBoundingClientRect();
+      const img = ctx.getImageData(0,0,cvs.width,cvs.height);
+      cvs.width = r.width*dpr; cvs.height = r.height*dpr;
+      ctx.setTransform(1,0,0,1,0,0);
       ctx.scale(dpr,dpr);
+      try{
+        ctx.globalCompositeOperation = "source-over";
+      }catch{}
+      if (img.width && img.height) ctx.putImageData(img,0,0);
       ctx.lineCap='round'; ctx.lineJoin='round';
-      const onResize=()=>{
-        const rect = cvs.getBoundingClientRect();
-        const img = ctx.getImageData(0,0,cvs.width,cvs.height);
-        cvs.width = rect.width*dpr; cvs.height = rect.height*dpr;
-        ctx.scale(dpr,dpr); ctx.putImageData(img,0,0);
-      };
+    };
+
+    useEffect(()=>{
+      setup();
+      const onResize=()=>setup();
       window.addEventListener('resize', onResize);
       return ()=>window.removeEventListener('resize', onResize);
     },[]);
-    const start = (x,y)=>{drawing.current=true; last.current=[x,y]};
-    const move  = (x,y)=>{
-      const cvs = ref.current; if(!cvs) return;
-      const ctx = cvs.getContext('2d');
-      ctx.globalCompositeOperation = isEraser? "destination-out":"source-over";
-      ctx.strokeStyle = color; ctx.lineWidth = width;
+
+    const start=(x,y)=>{ drawing.current=true; last.current=[x,y]; };
+    const drawTo=(x,y)=>{
+      const cvs=ref.current; if(!cvs) return;
+      const ctx=cvs.getContext('2d');
+      if (isEraser){
+        try{
+          ctx.globalCompositeOperation = "destination-out";
+          useWhiteErase.current = false;
+        }catch{
+          useWhiteErase.current = true;
+        }
+      }else{
+        ctx.globalCompositeOperation = "source-over";
+      }
       ctx.beginPath();
-      ctx.moveTo(...last.current); ctx.lineTo(x,y); ctx.stroke();
+      ctx.moveTo(...last.current);
+      ctx.lineTo(x,y);
+      ctx.lineWidth = width;
+      ctx.strokeStyle = isEraser && useWhiteErase.current ? "#ffffff" : color;
+      ctx.stroke();
       last.current=[x,y];
     };
-    const end = ()=>{ if(!drawing.current) return; drawing.current=false; onStrokeEnd&&onStrokeEnd(); };
-    const onPointerDown=e=>{ if(!active) return; const r=ref.current.getBoundingClientRect(); start(e.clientX-r.left,e.clientY-r.top); };
-    const onPointerMove=e=>{ if(!active||!drawing.current) return; const r=ref.current.getBoundingClientRect(); move(e.clientX-r.left,e.clientY-r.top); };
-    const onPointerUp=e=>{ if(!active) return; end(); };
-    return <canvas ref={ref} className="absolute inset-0" style={{pointerEvents: active?'auto':'none',zIndex:12}}
+    const end=()=>{ drawing.current=false; };
+
+    const toLocal=(e)=>{
+      const r=ref.current.getBoundingClientRect();
+      return [e.clientX-r.left, e.clientY-r.top];
+    };
+
+    const onPointerDown=e=>{
+      if(!active) return;
+      e.preventDefault();
+      ref.current.setPointerCapture && ref.current.setPointerCapture(e.pointerId);
+      const [x,y]=toLocal(e); start(x,y);
+    };
+    const onPointerMove=e=>{
+      if(!active||!drawing.current) return;
+      e.preventDefault();
+      const [x,y]=toLocal(e); drawTo(x,y);
+    };
+    const onPointerUp=e=>{
+      if(!active) return;
+      e.preventDefault();
+      ref.current.releasePointerCapture && ref.current.releasePointerCapture(e.pointerId);
+      end();
+    };
+
+    // expose clear via prop
+    useEffect(()=>{
+      if (!ref.current) return;
+      ref.current.__clear = ()=>{
+        const cvs=ref.current; const ctx=cvs.getContext('2d');
+        ctx.save();
+        ctx.setTransform(1,0,0,1,0,0);
+        ctx.clearRect(0,0,cvs.width,cvs.height);
+        ctx.restore();
+      };
+    },[]);
+
+    return <canvas ref={ref} className="absolute inset-0" style={{pointerEvents: active?'auto':'none', zIndex:50, touchAction:'none'}}
       onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerCancel={onPointerUp}/>;
   }
 
   function App(){
-    // load
     const init = (()=>{
       try{const s=JSON.parse(localStorage.getItem(STORAGE)||""); if(s) return s;}catch{}
-      return {pages:[{id:uid(),title:"",content:"",style:{ruledSpacingMm:10,gridEnabled:false,gridSizeMm:10},notes:[]}],index:0,pageSize:"a4",orientation:"portrait",zoom:1,pdfs:[]};
+      return {pages:[{id:uid(),kind:'note',title:'',content:'',style:{lineType:'ruled',ruledSpacingMm:10,gridEnabled:false,gridSizeMm:10},notes:[],blocks:[]}],index:0,pageSize:'a4',orientation:'portrait',zoom:1};
     })();
-    const [pages,setPages] = useState(init.pages);
-    const [index,setIndex] = useState(init.index);
-    const [pageSize,setPageSize] = useState(init.pageSize||"a4");
-    const [orientation,setOrientation] = useState(init.orientation||"portrait");
-    const [zoom,setZoom] = useState(init.zoom||1);
-    const [pdfs,setPdfs] = useState([]); // objectURLは永続できない
-    const [drawer,setDrawer] = useState(false);
-    const cur = pages[index];
-    const [mode,setMode] = useState(()=>localStorage.getItem(MODEKEY) || "edit"); // デフォルトは常に編集
+    const [pages,setPages]=useState(init.pages);
+    const [index,setIndex]=useState(init.index||0);
+    const [pageSize,setPageSize]=useState(init.pageSize||'a4');
+    const [orientation,setOrientation]=useState(init.orientation||'portrait');
+    const [zoom,setZoom]=useState(init.zoom||1);
+    const [drawer,setDrawer]=useState(false);
+    const [pdfs,setPdfs]=useState([]);
+    const cur=pages[index];
+    const [mode,setMode]=useState(()=>localStorage.getItem(MODEKEY)||"edit");
     const isView = mode!=="edit";
-    const setModeBoth = (m)=>{ setMode(m); localStorage.setItem(MODEKEY,m); };
+    const setModeBoth=(m)=>{ setMode(m); localStorage.setItem(MODEKEY,m); };
 
-    useEffect(()=>{
-      localStorage.setItem(STORAGE, JSON.stringify({pages,index,pageSize,orientation,zoom}));
-    },[pages,index,pageSize,orientation,zoom]);
+    useEffect(()=>{ localStorage.setItem(STORAGE, JSON.stringify({pages,index,pageSize,orientation,zoom})); },[pages,index,pageSize,orientation,zoom]);
 
-    // ruled + grid
-    const gap = (cur?.style?.ruledSpacingMm||10)*PX_PER_MM;
-    const ruledStyle = useMemo(()=>({backgroundImage:"linear-gradient(to bottom, rgba(0,0,0,0.08) 1px, transparent 1px)",backgroundSize:`100% ${gap}px`,backgroundPosition:`0px 12px`,lineHeight:`${gap}px`,paddingTop:"12px"}),[gap]);
-    const gridOverlay = useMemo(()=>{
-      if(!cur?.style?.gridEnabled) return {};
-      const sz=(cur.style.gridSizeMm||10)*PX_PER_MM; const color="rgba(0,0,0,0.08)";
-      return {backgroundImage:`linear-gradient(${color} 1px, transparent 1px), linear-gradient(90deg, ${color} 1px, transparent 1px)`,backgroundSize:`${sz}px ${sz}px`,zIndex:10};
-    },[cur?.style?.gridEnabled,cur?.style?.gridSizeMm]);
-
-    // page dimension
-    const dims=(ps,ori)=>{ const m={a4:[210,297],b5:[182,257],a5:[148,210],letter:[216,279]}; let [w,h]=m[ps]||m.a4; if(ori==="landscape") [w,h]=[h,w]; return {w,h}; };
+    const dims=(ps,ori)=>{ const m={a4:[210,297],b5:[182,257],a5:[148,210],letter:[216,279]}; let [w,h]=m[ps]||m.a4; if(ori==='landscape') [w,h]=[h,w]; return {w,h}; };
     const d=dims(pageSize,orientation); const W=d.w*PX_PER_MM*zoom, H=d.h*PX_PER_MM*zoom;
 
-    // tools
-    const [tool,setTool] = useState("text"); // text|pen|eraser|marker
-    const [penWidth,setPenWidth] = useState(2);
-    const [penColor,setPenColor] = useState("#111111");
-    const penActive = tool==="pen" || tool==="eraser" || tool==="marker";
-    const penProps = {active:penActive && !isView, color: tool==="marker" ? "rgba(255,235,59,0.5)" : penColor, width: tool==="marker" ? 10 : penWidth, isEraser: tool==="eraser"};
+    // ruled/grid
+    const gap=(cur?.style?.ruledSpacingMm||10)*PX_PER_MM;
+    const ruledOn = cur?.kind==='note' && cur?.style?.lineType!=='none';
+    const ruledStyle = useMemo(()=> ruledOn ? ({backgroundImage:"linear-gradient(to bottom, rgba(0,0,0,0.08) 1px, transparent 1px)",backgroundSize:`100% ${gap}px`,backgroundPosition:`0px 12px`,lineHeight:`${gap}px`,paddingTop:"12px"}) : ({paddingTop:"12px"}),[gap,ruledOn]);
+    const gridOverlay = useMemo(()=>{
+      if(cur?.kind!=='note'||!cur?.style?.gridEnabled) return {};
+      const sz=(cur.style.gridSizeMm||10)*PX_PER_MM; const color="rgba(0,0,0,0.1)";
+      return {backgroundImage:`linear-gradient(${color} 1px, transparent 1px), linear-gradient(90deg, ${color} 1px, transparent 1px)`,backgroundSize:`${sz}px ${sz}px`,zIndex:10};
+    },[cur?.kind,cur?.style?.gridEnabled,cur?.style?.gridSizeMm]);
 
-    // sticky
-    const addSticky=()=>{ if(isView) return; const n={id:uid(),x:24,y:24,w:160,h:120,title:"付箋",text:""}; setPages(p=>p.map((pg,i)=>i===index?{...pg,notes:[...(pg.notes||[]),n]}:pg)); };
+    // tools & pen
+    const [tool,setTool]=useState("text");
+    const [penWidth,setPenWidth]=useState(4);
+    const [penColor,setPenColor]=useState("#111111");
+    const penActive = tool==='pen' || tool==='marker' || tool==='eraser';
+
+    const clearCanvasRef = useRef(null);
+    const onClearCanvas = ()=>{ const c = document.querySelector('canvas'); if(c && c.__clear) c.__clear(); };
+
+    // notes
+    const addSticky=()=>{ if(isView||cur?.kind!=='note') return; const n={id:uid(),x:24,y:24,w:160,h:120,title:'付箋',text:''}; setPages(p=>p.map((pg,i)=>i===index?{...pg,notes:[...(pg.notes||[]),n]}:pg)); };
     const updateNote=(id,patch)=> setPages(p=>p.map((pg,i)=>i===index?{...pg,notes:(pg.notes||[]).map(n=>n.id===id?{...n,...patch}:n)}:pg));
     const deleteNote=(id)=> setPages(p=>p.map((pg,i)=>i===index?{...pg,notes:(pg.notes||[]).filter(n=>n.id!==id)}:pg));
-    const drag = useRef({id:null,offX:0,offY:0});
-    const onHeaderDown=(e,n)=>{ const r=e.currentTarget.parentElement.getBoundingClientRect(); drag.current={id:n.id,offX:e.clientX-r.left,offY:e.clientY-r.top}; window.addEventListener("mousemove",onMove); window.addEventListener("mouseup",onUp); };
-    const onMove=(e)=>{ const {id,offX,offY}=drag.current; if(!id) return; const layer=document.getElementById("notesLayer").getBoundingClientRect(); let x=e.clientX-layer.left-offX, y=e.clientY-layer.top-offY; x=Math.max(0,Math.min(x,layer.width-40)); y=Math.max(0,Math.min(y,layer.height-40)); updateNote(id,{x,y}); };
-    const onUp=()=>{ drag.current={id:null,offX:0,offY:0}; window.removeEventListener("mousemove",onMove); window.removeEventListener("mouseup",onUp); };
 
-    // save/export
-    const doSave=()=>{ localStorage.setItem(STORAGE, JSON.stringify({pages,index,pageSize,orientation,zoom})); alert("保存しました（ブラウザ内）"); };
-    const doExport=()=>{ const blob = new Blob([JSON.stringify({pages,index,pageSize,orientation,zoom},null,2)], {type:"application/json"}); const url=URL.createObjectURL(blob); const a=document.createElement("a"); a.href=url; a.download="notelink_backup.json"; a.click(); URL.revokeObjectURL(url); };
+    // blocks
+    const addGridBlock=()=>{
+      if(isView||cur?.kind!=='note') return;
+      const gridPx=(cur.style.gridSizeMm||10)*PX_PER_MM;
+      const b={id:uid(),kind:'grid',x:40,y:40,w:W/2,h:H/2,gridPx};
+      setPages(p=>p.map((pg,i)=>i===index?{...pg,blocks:[...(pg.blocks||[]),b]}:pg));
+    };
 
-    // pdf
-    const pdfInput = useRef(null);
-    const [pdfViewer,setPdfViewer] = useState(null);
-    const addPdf=(e)=>{ if(isView) return; const f=e.target.files?.[0]; if(!f) return; const url=URL.createObjectURL(f); const item={id:uid(),name:f.name,url}; setPdfs(prev=>[item,...prev]); e.target.value=""; };
-    const removePdf=(id)=> setPdfs(prev=>prev.filter(x=>x.id!==id));
+    const pdfInput=useRef(null);
+    const [pdfViewer,setPdfViewer]=useState(null);
+    const addPdfFile=(e)=>{ if(isView) return; const f=e.target.files?.[0]; if(!f) return; const url=URL.createObjectURL(f); const item={id:uid(),name:f.name,url}; setPdfs(prev=>[item,...prev]); e.target.value=""; };
+    const addPdfAsPage=(item)=>{ const page={id:uid(),kind:'pdf',title:item.name,style:{},url:item.url,name:item.name,notes:[],blocks:[]}; setPages(prev=>[...prev,page]); setIndex(pages.length); };
+    const addPdfBlock=(item)=>{ if(isView||cur?.kind!=='note') return; const b={id:uid(),kind:'pdf',x:30,y:60,w:W*0.6,h:H*0.6,url:item.url,name:item.name}; setPages(p=>p.map((pg,i)=>i===index?{...pg,blocks:[...(pg.blocks||[]),b]}:pg)); };
+    const deleteBlock=(id)=> setPages(p=>p.map((pg,i)=>i===index?{...pg,blocks:(pg.blocks||[]).filter(b=>b.id!==id)}:pg));
 
-    // page ops
-    const addPage=()=>{ if(isView) return; const n={id:uid(),title:cur.title,content:"",style:{...cur.style},notes:[]}; const arr=[...pages,n]; setPages(arr); setIndex(arr.length-1); };
+    // dragging for notes/blocks
+    const drag=useRef({id:null,type:null,offX:0,offY:0});
+    const onHeaderDown=(e,meta)=>{ const r=e.currentTarget.parentElement.getBoundingClientRect(); drag.current={id:meta.id,type:meta.type,offX:e.clientX-r.left,offY:e.clientY-r.top}; window.addEventListener("mousemove",onMove); window.addEventListener("mouseup",onUp); };
+    const onMove=(e)=>{ const {id,type,offX,offY}=drag.current; if(!id) return; const layer=document.getElementById("overlayLayer").getBoundingClientRect(); let x=e.clientX-layer.left-offX, y=e.clientY-layer.top-offY; x=Math.max(0,Math.min(x,layer.width-40)); y=Math.max(0,Math.min(y,layer.height-40)); if(type==='note') updateNote(id,{x,y}); else setPages(p=>p.map((pg,i)=>i===index?{...pg,blocks:(pg.blocks||[]).map(b=>b.id===id?{...b,x,y}:b)}:pg)); };
+    const onUp=()=>{ drag.current={id:null,type:null,offX:0,offY:0}; window.removeEventListener("mousemove",onMove); window.removeEventListener("mouseup",onUp); };
+
+    // pages
+    const addPage=()=>{ if(isView) return; const n={id:uid(),kind:'note',title:cur?.title||'',content:'',style:{lineType:cur?.style?.lineType||'ruled',ruledSpacingMm:cur?.style?.ruledSpacingMm||10,gridEnabled:false,gridSizeMm:10},notes:[],blocks:[]}; const arr=[...pages,n]; setPages(arr); setIndex(arr.length-1); };
     const deletePage=()=>{ if(isView) return; if(pages.length<=1){alert("最後のページは削除できません");return;} if(!confirm(`ページ ${index+1} を削除しますか？`)) return; const arr=pages.filter((_,i)=>i!==index); setPages(arr); setIndex(Math.max(0,index-1)); };
 
-    // print
+    // print/save/load
     const doPrint=()=>{ const styleId="print-style"; let st=document.getElementById(styleId); const orient = orientation==="landscape" ? " landscape":""; const css=`@page { size: ${pageSize.toUpperCase()}${orient}; margin: 10mm; }`; if(!st){st=document.createElement("style"); st.id=styleId; document.head.appendChild(st);} st.textContent=css; window.print(); };
+    const doSave=()=>{ localStorage.setItem(STORAGE, JSON.stringify({pages,index,pageSize,orientation,zoom})); alert("保存しました（ブラウザ）"); };
+    const doLoad=()=>{ try{ const s=JSON.parse(localStorage.getItem(STORAGE)||""); if(!s) return alert("保存が見つかりません"); setPages(s.pages||pages); setIndex(s.index||0); setPageSize(s.pageSize||'a4'); setOrientation(s.orientation||'portrait'); setZoom(s.zoom||1); alert("読み込みました"); }catch{ alert("読み込みに失敗しました"); } };
 
-    // UI
     return (
       <div className="w-full min-h-screen bg-neutral-50">
-        {/* header */}
         <div className="sticky top-0 z-40 bg-white/90 backdrop-blur border-b no-print">
           <div className="max-w-6xl mx-auto px-3 py-2 flex items-center gap-2">
             <button className="px-2 py-1 rounded border" onClick={()=>setDrawer(true)}>☰</button>
@@ -176,10 +258,9 @@
           </div>
         </div>
 
-        {/* drawer */}
         {drawer && (
           <div className="fixed inset-0 z-50 flex">
-            <div className="w-80 h-full bg-white border-r shadow-xl p-3 overflow-y-auto drawer">
+            <div className="w-80 h-full bg-white border-r shadow-xl p-3 overflow-y-auto">
               <div className="flex items-center justify-between mb-2">
                 <div className="font-medium">ツール</div>
                 <button className="px-2 py-1 rounded border" onClick={()=>setDrawer(false)}>閉じる</button>
@@ -205,9 +286,9 @@
               </div>
 
               <div className="mb-4">
-                <div className="text-sm text-neutral-600 mb-1">PDF ライブラリ（セッション内）</div>
+                <div className="text-sm text-neutral-600 mb-1">PDF ライブラリ</div>
                 <div className="flex gap-2 mb-2">
-                  <input type="file" accept="application/pdf" className="hidden" ref={pdfInput} onChange={addPdf}/>
+                  <input type="file" accept="application/pdf" className="hidden" ref={pdfInput} onChange={addPdfFile}/>
                   <button className="px-2 py-1 rounded border flex-1" onClick={()=>pdfInput.current?.click()} disabled={isView}>PDF追加</button>
                 </div>
                 <ul className="space-y-2 max-h-[40vh] overflow-auto">
@@ -217,7 +298,9 @@
                       <span className="truncate mr-2" title={p.name}>{p.name}</span>
                       <div className="flex gap-1">
                         <button className="px-2 py-1 rounded border" onClick={()=>setPdfViewer(p.url)}>開く</button>
-                        <button className="px-2 py-1 rounded border btn" onClick={()=>removePdf(p.id)} disabled={isView}>削除</button>
+                        <button className="px-2 py-1 rounded border" onClick={()=>addPdfAsPage(p)} disabled={isView}>新規ページ</button>
+                        <button className="px-2 py-1 rounded border" onClick={()=>addPdfBlock(p)} disabled={isView}>貼り込む</button>
+                        <button className="px-2 py-1 rounded border btn" onClick={()=>setPdfs(prev=>prev.filter(x=>x.id!==p.id))} disabled={isView}>削除</button>
                       </div>
                     </li>
                   ))}
@@ -225,16 +308,15 @@
               </div>
 
               <div className="mb-4">
-                <div className="text-sm text-neutral-600 mb-1">バックアップ</div>
+                <div className="text-sm text-neutral-600 mb-1">保存/読込</div>
                 <button className="px-2 py-1 rounded border w-full mb-2" onClick={doSave}>保存（ブラウザ）</button>
-                <button className="px-2 py-1 rounded border w-full" onClick={doExport}>JSONエクスポート</button>
+                <button className="px-2 py-1 rounded border w-full" onClick={doLoad}>読込（ブラウザ）</button>
               </div>
             </div>
             <div className="flex-1 bg-black/30" onClick={()=>setDrawer(false)}></div>
           </div>
         )}
 
-        {/* PDF viewer */}
         {pdfViewer && (
           <div className="fixed inset-0 z-50 flex items-center justify-center">
             <div className="absolute inset-0 bg-black/50" onClick={()=>setPdfViewer(null)}></div>
@@ -243,72 +325,83 @@
                 <div className="font-medium">PDF プレビュー</div>
                 <button className="px-2 py-1 rounded border" onClick={()=>setPdfViewer(null)}>閉じる</button>
               </div>
-              <iframe src={pdfViewer} className="w-full h-[calc(88vh-48px)] border rounded"></iframe>
+              <object data={pdfViewer} type="application/pdf" className="w-full h-[calc(88vh-48px)]">
+                <embed src={pdfViewer} type="application/pdf" className="w-full h-[calc(88vh-48px)]"/>
+                <div className="p-2 text-sm">PDFプレビューに対応していないブラウザです。ダウンロードして開いてください。</div>
+              </object>
             </div>
           </div>
         )}
 
-        {/* main */}
         <div className="max-w-6xl mx-auto p-3 grid grid-cols-1 gap-3">
-          <div className="bg-white border rounded-xl shadow-sm" style={{width: W+32, margin:"0 auto"}}>
+          <div className="bg-white border rounded-xl shadow-sm" style={{width: (d.w*PX_PER_MM*zoom)+32, margin:"0 auto"}}>
             <div className="p-3 sm:p-4">
-              {/* title row */}
               <div className="flex flex-col sm:flex-row gap-2 mb-3">
-                <input value={cur.title} onChange={e=>!isView&&setPages(p=>p.map((pg,i)=>i===index?{...pg,title:e.target.value}:pg))} placeholder="タイトル" className="px-3 py-2 border rounded w-full text-base sm:text-lg" readOnly={isView}/>
+                <input value={cur.title||''} onChange={e=>!isView&&setPages(p=>p.map((pg,i)=>i===index?{...pg,title:e.target.value}:pg))} placeholder="タイトル" className="px-3 py-2 border rounded w-full text-base sm:text-lg" readOnly={isView}/>
                 <div className="flex gap-2 items-center">
-                  <button className="px-3 py-2 rounded border btn" onClick={addPage} disabled={isView}>＋ ページ追加</button>
-                  <button className="px-3 py-2 rounded border btn" onClick={deletePage} disabled={isView}>ページ削除</button>
+                  <button className="px-3 py-2 rounded border btn" onClick={()=>{ const n={id:uid(),kind:'note',title:cur?.title||'',content:'',style:{lineType:cur?.style?.lineType||'ruled',ruledSpacingMm:cur?.style?.ruledSpacingMm||10,gridEnabled:false,gridSizeMm:10},notes:[],blocks:[]}; const arr=[...pages,n]; setPages(arr); setIndex(arr.length-1); }} disabled={isView}>＋ ページ追加</button>
+                  <button className="px-3 py-2 rounded border btn" onClick={()=>{ if(isView) return; if(pages.length<=1){alert('最後のページは削除できません');return;} if(!confirm(`ページ ${index+1} を削除しますか？`)) return; const arr=pages.filter((_,i)=>i!==index); setPages(arr); setIndex(Math.max(0,index-1)); }} disabled={isView}>ページ削除</button>
                 </div>
               </div>
 
-              {/* tools */}
-              <div className="flex flex-wrap items-center gap-2 mb-2 text-sm">
-                <span className="text-neutral-600">モード:</span>
-                <button className={"px-2 py-1 rounded border "+(tool==='text'?'tool-active':'')} onClick={()=>setTool('text')}>テキスト</button>
-                <button className={"px-2 py-1 rounded border "+(tool==='pen'?'tool-active':'')} onClick={()=>setTool('pen')}>ペン</button>
-                <button className={"px-2 py-1 rounded border "+(tool==='marker'?'tool-active':'')} onClick={()=>setTool('marker')}>マーカー</button>
-                <button className={"px-2 py-1 rounded border "+(tool==='eraser'?'tool-active':'')} onClick={()=>setTool('eraser')}>消しゴム</button>
-                <div className="w-px h-5 bg-neutral-200 mx-1"></div>
-                <label>太さ</label>
-                <select className="px-2 py-1 border rounded" value={String(penWidth)} onChange={e=>setPenWidth(Number(e.target.value))}>
-                  <option value="2">細</option><option value="4">中</option><option value="8">太</option>
-                </select>
-                <input type="color" value={penColor} onChange={e=>setPenColor(e.target.value)} className="w-9 h-6 p-0 border rounded"/>
-                <div className="w-px h-5 bg-neutral-200 mx-1"></div>
-                <label>罫線幅</label>
-                <select className="px-2 py-1 border rounded" value={String(cur.style.ruledSpacingMm||10)} onChange={e=>!isView && (cur.content?.length?null:setPages(p=>p.map((pg,i)=>i===index?{...pg,style:{...pg.style,ruledSpacingMm:Number(e.target.value)}}:pg)))} disabled={isView || (cur.content||'').length>0}>
-                  <option value="10">10 mm</option><option value="8">8 mm</option><option value="6">6 mm</option>
-                </select>
-                {(cur.content||'').length>0 && <span className="text-xs text-neutral-500">（入力開始後は罫線幅を固定）</span>}
+              {cur.kind==='note' ? (
+                <div className="flex flex-wrap items-center gap-2 mb-2 text-sm">
+                  <span className="text-neutral-600">モード:</span>
+                  <button className={"px-2 py-1 rounded border "+(tool==='text'?'tool-active':'')} onClick={()=>setTool('text')}>テキスト</button>
+                  <button className={"px-2 py-1 rounded border "+(tool==='pen'?'tool-active':'')} onClick={()=>setTool('pen')}>ペン</button>
+                  <button className={"px-2 py-1 rounded border "+(tool==='marker'?'tool-active':'')} onClick={()=>setTool('marker')}>マーカー</button>
+                  <button className={"px-2 py-1 rounded border "+(tool==='eraser'?'tool-active':'')} onClick={()=>setTool('eraser')}>消しゴム</button>
+                  <button className="px-2 py-1 rounded border" onClick={onClearCanvas}>キャンバス消去</button>
+                  <div className="w-px h-5 bg-neutral-200 mx-1"></div>
+                  <label>太さ</label>
+                  <select className="px-2 py-1 border rounded" value={String(penWidth)} onChange={e=>setPenWidth(Number(e.target.value))}>
+                    <option value="2">極細</option><option value="4">細</option><option value="8">中</option><option value="12">太</option>
+                  </select>
+                  <input type="color" value={penColor} onChange={e=>setPenColor(e.target.value)} className="w-9 h-6 p-0 border rounded"/>
+                  <div className="w-px h-5 bg-neutral-200 mx-1"></div>
+                  <label>罫線</label>
+                  <select className="px-2 py-1 border rounded" value={cur.style.lineType||'ruled'} onChange={e=>!isView&&setPages(p=>p.map((pg,i)=>i===index?{...pg,style:{...pg.style,lineType:e.target.value}}:pg))}>
+                    <option value="ruled">横罫</option><option value="none">なし</option>
+                  </select>
+                  <label>罫線幅</label>
+                  <select className="px-2 py-1 border rounded" value={String(cur.style.ruledSpacingMm||10)} onChange={e=>!isView && (cur.content?.length?null:setPages(p=>p.map((pg,i)=>i===index?{...pg,style:{...pg.style,ruledSpacingMm:Number(e.target.value)}}:pg)))} disabled={isView || (cur.content||'').length>0 || (cur.style.lineType==='none')}>
+                    <option value="10">10 mm</option><option value="8">8 mm</option><option value="6">6 mm</option>
+                  </select>
 
-                <div className="w-px h-5 bg-neutral-200 mx-1"></div>
-                <button className={"px-3 py-1 rounded border "+(cur.style.gridEnabled?"bg-black text-white":"")} onClick={()=>!isView&&setPages(p=>p.map((pg,i)=>i===index?{...pg,style:{...pg.style,gridEnabled:!pg.style.gridEnabled}}:pg))}>グラフ升目 {cur.style.gridEnabled?"ON":"OFF"}</button>
-                <select className="px-2 py-1 border rounded" value={String(cur.style.gridSizeMm||10)} onChange={e=>!isView&&setPages(p=>p.map((pg,i)=>i===index?{...pg,style:{...pg.style,gridSizeMm:Number(e.target.value)}}:pg))} disabled={isView}>
-                  <option value="10">10 mm</option><option value="8">8 mm</option><option value="5">5 mm</option>
-                </select>
+                  <div className="w-px h-5 bg-neutral-200 mx-1"></div>
+                  <button className={"px-3 py-1 rounded border "+(cur.style.gridEnabled?"bg-black text-white":"")} onClick={()=>!isView&&setPages(p=>p.map((pg,i)=>i===index?{...pg,style:{...pg.style,gridEnabled:!pg.style.gridEnabled}}:pg))}>グラフ升目 {cur.style.gridEnabled?"ON":"OFF"}</button>
+                  <select className="px-2 py-1 border rounded" value={String(cur.style.gridSizeMm||10)} onChange={e=>!isView&&setPages(p=>p.map((pg,i)=>i===index?{...pg,style:{...pg.style,gridSizeMm:Number(e.target.value)}}:pg))} disabled={isView}>
+                    <option value="10">10 mm</option><option value="8">8 mm</option><option value="5">5 mm</option>
+                  </select>
 
-                <div className="flex-1"></div>
-                <button className="px-2 py-1 rounded border btn" onClick={addSticky} disabled={isView}>付箋</button>
-              </div>
+                  <div className="w-px h-5 bg-neutral-200 mx-1"></div>
+                  <button className="px-2 py-1 rounded border" onClick={()=>{ const gridPx=(cur.style.gridSizeMm||10)*PX_PER_MM; const b={id:uid(),kind:'grid',x:40,y:40,w:(d.w*PX_PER_MM*zoom)/2,h:(d.h*PX_PER_MM*zoom)/2,gridPx}; setPages(p=>p.map((pg,i)=>i===index?{...pg,blocks:[...(pg.blocks||[]),b]}:pg)); }} disabled={isView}>グリッド貼り込み</button>
 
-              {/* editor */}
-              <div className="relative border rounded-xl overflow-hidden" style={{width:W,height:H}}>
-                {/* grid overlay */}
-                <div className="absolute inset-0 pointer-events-none" style={gridOverlay}></div>
-                {/* pen canvas */}
-                <PenLayer {...penProps} onStrokeEnd={()=>{}}/>
-                {/* notes */}
-                <div id="notesLayer" className="absolute inset-0" style={{pointerEvents:isView?'none':'auto'}}>
-                  {(cur.notes||[]).map(n=>(
-                    <Sticky key={n.id} note={n} isView={isView} onHeaderDown={onHeaderDown} onDelete={deleteNote} onChange={updateNote}/>
-                  ))}
+                  <div className="flex-1"></div>
+                  <button className="px-2 py-1 rounded border btn" onClick={()=>{ const n={id:uid(),x:24,y:24,w:160,h:120,title:'付箋',text:''}; setPages(p=>p.map((pg,i)=>i===index?{...pg,notes:[...(pg.notes||[]),n]}:pg)); }} disabled={isView}>付箋</button>
                 </div>
-                {/* text */}
-                <textarea value={cur.content} onChange={e=>!isView&&setPages(p=>p.map((pg,i)=>i===index?{...pg,content:e.target.value}:pg))}
-                  placeholder={isView?"閲覧モードです（編集は上で切替）":"ここにノートを書き始める…"} className="absolute inset-0 w-full h-full p-3 text-base bg-white"
-                  style={{...ruledStyle, pointerEvents: (penActive||isView)?'none':'auto'}} readOnly={isView}></textarea>
-              </div>
+              ) : (
+                <div className="text-sm text-neutral-600 mb-2">PDFページ（ペン描画・付箋は有効）</div>
+              )}
 
+              <div className="relative border rounded-xl overflow-hidden" style={{width: d.w*PX_PER_MM*zoom, height: d.h*PX_PER_MM*zoom}}>
+                {cur.kind==='note' && <div className="absolute inset-0 pointer-events-none" style={gridOverlay}></div>}
+                <PenLayer active={penActive && !isView} color={tool==='marker'?'rgba(255,235,59,0.5)':penColor} width={tool==='marker'?10:penWidth} isEraser={tool==='eraser'} />
+                <div id="overlayLayer" className="absolute inset-0" style={{pointerEvents:isView?'none':'auto', zIndex:45}}>
+                  {(cur.blocks||[]).map(b=>(<Block key={b.id} block={b} isView={isView} onHeaderDown={onHeaderDown} onDelete={deleteBlock}/>))}
+                  {(cur.notes||[]).map(n=>(<Sticky key={n.id} note={n} isView={isView} onHeaderDown={onHeaderDown} onDelete={id=>setPages(p=>p.map((pg,i)=>i===index?{...pg,notes:(pg.notes||[]).filter(x=>x.id!==id)}:pg))} onChange={(id,patch)=>setPages(p=>p.map((pg,i)=>i===index?{...pg,notes:(pg.notes||[]).map(x=>x.id===id?{...x,...patch}:x)}:pg))}/>))}
+                </div>
+                {cur.kind==='note' ? (
+                  <textarea value={cur.content||''} onChange={e=>!isView&&setPages(p=>p.map((pg,i)=>i===index?{...pg,content:e.target.value}:pg))}
+                    placeholder={isView?"閲覧モードです（編集は上で切替）":"ここにノートを書き始める…"} className="absolute inset-0 w-full h-full p-3 text-base bg-white"
+                    style={{...ruledStyle, pointerEvents: (penActive||isView)?'none':'auto'}} readOnly={isView}></textarea>
+                ) : (
+                  <object data={cur.url} type="application/pdf" className="absolute inset-0 w-full h-full">
+                    <embed src={cur.url} type="application/pdf" className="absolute inset-0 w-full h-full"/>
+                    <div className="p-2 text-sm bg-white">PDFプレビューに対応していないブラウザです。ダウンロードして開いてください。</div>
+                  </object>
+                )}
+              </div>
             </div>
           </div>
         </div>
