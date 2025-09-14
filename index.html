@@ -3,439 +3,320 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Note Link v0.5.5 – 左ツールバー/付箋修正/PDFプレビュー</title>
+  <title>Note Link v0.6.0 – 入力/付箋/ペン/PDF 安定版</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
   <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
   <style>
-    .btn:disabled { opacity:.5; cursor:not-allowed; }
-    .chip{ font-size:12px; padding:2px 8px; border-radius:999px; border:1px solid #ddd; }
-    .note{ box-shadow:0 2px 10px rgba(0,0,0,.06); resize:both; overflow:auto; }
-    .note:focus-within{ outline:2px solid #60a5fa; }
-    .note-header{ cursor:move; user-select:none; background:rgba(0,0,0,.08); }
-    .drawer-enter { transform: translateX(-100%); }
-    .drawer-open  { transform: translateX(0); }
-    @media print{
-      .no-print{ display:none !important; }
-    }
+    .btn:disabled{opacity:.5;cursor:not-allowed}
+    .chip{font-size:12px;padding:2px 8px;border-radius:999px;border:1px solid #ddd}
+    .drawer{transition:transform .2s ease}
+    .note{box-shadow:0 2px 10px rgba(0,0,0,.06);resize:both;overflow:auto}
+    .note-header{cursor:move;user-select:none;background:rgba(0,0,0,.08)}
+    .badge{font-size:12px;padding:.2rem .5rem;border-radius:8px;border:1px solid #e5e7eb;background:#f9fafb}
+    .tool-active{background:#111827;color:#fff}
+    @media print{.no-print{display:none!important}}
   </style>
 </head>
 <body class="bg-neutral-50">
   <div id="root"></div>
 
   <script type="text/babel">
-    const { useEffect, useMemo, useRef, useState } = React;
-    const PX_PER_MM = 3.78;
-    const VERSION = "v0.5.5";
-    const defaultStyle = { lineType: "ruled", ruledSpacingMm: 10, gridEnabled: false, gridSizeMm: 10 };
-    const STORAGE_KEY = "notelink.v0.5.5";
-    const MODE_KEY = "notelink.v0.5.5.mode";
+  const {useEffect,useMemo,useRef,useState} = React;
+  const PX_PER_MM = 3.78;
+  const VERSION="v0.6.0";
+  const STORAGE="notelink.v0.6.0";
+  const MODEKEY="notelink.v0.6.0.mode";
+  const uid = ()=>Math.random().toString(36).slice(2,10);
 
-    const loadState = () => { try { return JSON.parse(localStorage.getItem(STORAGE_KEY) || ""); } catch { return null; } };
-    const saveState  = (s) => localStorage.setItem(STORAGE_KEY, JSON.stringify(s));
-    const loadMode   = () => localStorage.getItem(MODE_KEY);
-    const saveMode   = (m) => localStorage.setItem(MODE_KEY, m);
-    const uuid       = () => Math.random().toString(36).slice(2,10);
-
-    // 付箋（ローカル状態→blur時に親へ保存）
-    function Sticky({ note, isView, onHeaderDown, onDelete, onCommit }){
-      const [title, setTitle] = React.useState(note.title || "付箋");
-      const [text, setText]   = React.useState(note.text || "");
-      useEffect(()=>{ setTitle(note.title || "付箋"); setText(note.text || ""); }, [note.id]);
-      const commit = () => { if (isView) return; onCommit(note.id, { title, text }); };
-      return (
-        <div className="note absolute bg-yellow-200 rounded" style={{ left:note.x, top:note.y, width:note.w, height:note.h }}>
-          <div className="note-header text-xs px-2 py-1 rounded-t flex items-center justify-between" onMouseDown={(e)=>onHeaderDown(e, note)}>
-            <input className="bg-transparent outline-none font-medium w-full" value={title} onChange={e=>setTitle(e.target.value)} onBlur={commit} disabled={isView} />
-            <button className="text-xs px-1 border rounded ml-2 btn" onClick={()=>onDelete(note.id)} disabled={isView}>×</button>
-          </div>
-          <textarea className="p-2 text-sm bg-transparent w-full h-[calc(100%-28px)] outline-none" value={text} onChange={e=>setText(e.target.value)} onBlur={commit} readOnly={isView}></textarea>
+  // ---- Sticky ----
+  function Sticky({note,isView,onHeaderDown,onDelete,onChange}){
+    const [title,setTitle] = useState(note.title||"付箋");
+    const [text,setText]   = useState(note.text||"");
+    useEffect(()=>{setTitle(note.title||"付箋");setText(note.text||"");},[note.id]);
+    useEffect(()=>{onChange(note.id,{title,text});},[title,text]);
+    return (
+      <div className="note absolute bg-yellow-200 rounded" style={{left:note.x,top:note.y,width:note.w,height:note.h,zIndex:30}}>
+        <div className="note-header text-xs px-2 py-1 rounded-t flex items-center justify-between" onMouseDown={(e)=>!isView&&onHeaderDown(e,note)}>
+          <input className="bg-transparent outline-none font-medium w-full" value={title} onChange={e=>setTitle(e.target.value)} disabled={isView}/>
+          <button className="text-xs px-1 border rounded ml-2 btn" onClick={()=>onDelete(note.id)} disabled={isView}>×</button>
         </div>
-      );
-    }
+        <textarea className="p-2 text-sm bg-transparent w-full h-[calc(100%-28px)] outline-none" value={text} onChange={e=>setText(e.target.value)} readOnly={isView}></textarea>
+      </div>
+    );
+  }
 
-    function App(){
-      const init = React.useMemo(() => {
-        const s = loadState();
-        if (s) return s;
-        const first = { id: uuid(), title: "", content: "", style: { ...defaultStyle }, notes: [] };
-        return { pages:[first], index:0, pdfs:[], pageSize:"a4", orientation:"portrait", zoom:1 };
-      }, []);
-
-      const [pages, setPages] = useState(init.pages);
-      const [index, setIndex] = useState(init.index);
-      const [pdfs, setPdfs] = useState(init.pdfs);
-      const [pageSize, setPageSize] = useState(init.pageSize || "a4");
-      const [orientation, setOrientation] = useState(init.orientation || "portrait");
-      const [zoom, setZoom] = useState(init.zoom || 1);
-      const [drawerOpen, setDrawerOpen] = useState(false);
-      const [pdfPreview, setPdfPreview] = useState(null); // {name, url}
-      const current = pages[index];
-
-      const [isMobile, setIsMobile] = useState(false);
-      useEffect(() => {
-        const onResize = () => setIsMobile(window.innerWidth < 640);
-        onResize(); window.addEventListener("resize", onResize);
-        return () => window.removeEventListener("resize", onResize);
-      }, []);
-
-      // 閲覧/編集（コンパクト統合）
-      const [mode, setMode] = useState(() => {
-        const stored = loadMode();
-        if (stored === "view" || stored === "edit") return stored;
-        return (window.innerWidth < 640) ? "view" : "edit";
-      });
-      const isView = mode === "view";
-      const setModeBoth = (m) => { setMode(m); saveMode(m); };
-
-      useEffect(() => { saveState({ pages, index, pdfs, pageSize, orientation, zoom }); }, [pages, index, pdfs, pageSize, orientation, zoom]);
-
-      // 罫線同期
-      const paddingTopPx = 12;
-      const gapPx = current?.style?.ruledSpacingMm ? current.style.ruledSpacingMm * PX_PER_MM : 32;
-      const ruledBg = useMemo(() => {
-        if (!current) return undefined;
-        if (current.style.lineType !== "ruled") return undefined;
-        const size = `${gapPx}px`;
-        return {
-          backgroundImage: "linear-gradient(to bottom, rgba(0,0,0,0.08) 1px, transparent 1px)",
-          backgroundSize: `100% ${size}`,
-          backgroundPosition: `0px ${paddingTopPx}px`,
-          lineHeight: `${gapPx}px`,
-          paddingTop: `${paddingTopPx}px`,
-        };
-      }, [current, gapPx]);
-
-      const gridOverlay = useMemo(() => {
-        if (!current?.style.gridEnabled) return undefined;
-        const sz = current.style.gridSizeMm * PX_PER_MM;
-        const color = "rgba(0,0,0,0.08)";
-        return { backgroundImage: `linear-gradient(${color} 1px, transparent 1px), linear-gradient(90deg, ${color} 1px, transparent 1px)`, backgroundSize: `${sz}px ${sz}px` };
-      }, [current]);
-
-      // ページ操作
-      const addPage = () => {
-        if (!current || isView) return;
-        const newPage = { id: uuid(), title: current.title, content: "", style: { ...current.style }, notes: [] };
-        const newPages = [...pages, newPage];
-        setPages(newPages); setIndex(newPages.length - 1);
+  // ---- Pen Canvas ----
+  function PenLayer({active,color,width,isEraser,onStrokeEnd}){
+    const ref = useRef(null);
+    const drawing = useRef(false);
+    const last = useRef([0,0]);
+    useEffect(()=>{
+      const cvs = ref.current; if(!cvs) return;
+      const ctx = cvs.getContext('2d');
+      const dpr = window.devicePixelRatio || 1;
+      const rect = cvs.getBoundingClientRect();
+      cvs.width = rect.width*dpr; cvs.height = rect.height*dpr;
+      ctx.scale(dpr,dpr);
+      ctx.lineCap='round'; ctx.lineJoin='round';
+      const onResize=()=>{
+        const rect = cvs.getBoundingClientRect();
+        const img = ctx.getImageData(0,0,cvs.width,cvs.height);
+        cvs.width = rect.width*dpr; cvs.height = rect.height*dpr;
+        ctx.scale(dpr,dpr); ctx.putImageData(img,0,0);
       };
-      const deletePage = () => {
-        if (isView) return;
-        if (pages.length <= 1) { alert("最後のページは削除できません"); return; }
-        if (!confirm(`ページ ${index+1} を削除しますか？`)) return;
-        const newPages = pages.filter((_,i) => i !== index);
-        setPages(newPages); setIndex(Math.max(0, index-1));
-      };
-      const prev = () => setIndex(i => Math.max(0, i-1));
-      const next = () => setIndex(i => Math.min(pages.length-1, i+1));
+      window.addEventListener('resize', onResize);
+      return ()=>window.removeEventListener('resize', onResize);
+    },[]);
+    const start = (x,y)=>{drawing.current=true; last.current=[x,y]};
+    const move  = (x,y)=>{
+      const cvs = ref.current; if(!cvs) return;
+      const ctx = cvs.getContext('2d');
+      ctx.globalCompositeOperation = isEraser? "destination-out":"source-over";
+      ctx.strokeStyle = color; ctx.lineWidth = width;
+      ctx.beginPath();
+      ctx.moveTo(...last.current); ctx.lineTo(x,y); ctx.stroke();
+      last.current=[x,y];
+    };
+    const end = ()=>{ if(!drawing.current) return; drawing.current=false; onStrokeEnd&&onStrokeEnd(); };
+    const onPointerDown=e=>{ if(!active) return; const r=ref.current.getBoundingClientRect(); start(e.clientX-r.left,e.clientY-r.top); };
+    const onPointerMove=e=>{ if(!active||!drawing.current) return; const r=ref.current.getBoundingClientRect(); move(e.clientX-r.left,e.clientY-r.top); };
+    const onPointerUp=e=>{ if(!active) return; end(); };
+    return <canvas ref={ref} className="absolute inset-0" style={{pointerEvents: active?'auto':'none',zIndex:12}}
+      onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerCancel={onPointerUp}/>;
+  }
 
-      // PDF（簡易プレビュー）
-      const fileInputRef = useRef(null);
-      const addPdf = (e) => {
-        if (isView) return;
-        const f = e.target.files?.[0]; if (!f) return;
-        const url = URL.createObjectURL(f);
-        const item = { id: uuid(), name: f.name, url, addedAt: Date.now() };
-        setPdfs(lst => [item, ...lst]); e.target.value = "";
-      };
-      const removePdf = (id) => { if (isView) return; setPdfs(lst => lst.filter(x => x.id !== id)); };
-      const openPdf = (item) => setPdfPreview(item);
+  function App(){
+    // load
+    const init = (()=>{
+      try{const s=JSON.parse(localStorage.getItem(STORAGE)||""); if(s) return s;}catch{}
+      return {pages:[{id:uid(),title:"",content:"",style:{ruledSpacingMm:10,gridEnabled:false,gridSizeMm:10},notes:[]}],index:0,pageSize:"a4",orientation:"portrait",zoom:1,pdfs:[]};
+    })();
+    const [pages,setPages] = useState(init.pages);
+    const [index,setIndex] = useState(init.index);
+    const [pageSize,setPageSize] = useState(init.pageSize||"a4");
+    const [orientation,setOrientation] = useState(init.orientation||"portrait");
+    const [zoom,setZoom] = useState(init.zoom||1);
+    const [pdfs,setPdfs] = useState([]); // objectURLは永続できない
+    const [drawer,setDrawer] = useState(false);
+    const cur = pages[index];
+    const [mode,setMode] = useState(()=>localStorage.getItem(MODEKEY) || "edit"); // デフォルトは常に編集
+    const isView = mode!=="edit";
+    const setModeBoth = (m)=>{ setMode(m); localStorage.setItem(MODEKEY,m); };
 
-      // ノート更新
-      const updatePage = (patch) => {
-        if (isView) return;
-        setPages(prev => prev.map((p,i)=> i===index ? { ...p, ...patch, style:{ ...p.style, ...(patch.style||{}) } } : p));
-      };
+    useEffect(()=>{
+      localStorage.setItem(STORAGE, JSON.stringify({pages,index,pageSize,orientation,zoom}));
+    },[pages,index,pageSize,orientation,zoom]);
 
-      // ハイライト
-      const taRef = useRef(null);
-      const applyHighlight = () => {
-        if (isView) return;
-        const ta = taRef.current; if (!ta) return;
-        const start = ta.selectionStart; const end = ta.selectionEnd; if (start === end) return;
-        const before = current.content.slice(0, start);
-        const sel    = current.content.slice(start, end);
-        const after  = current.content.slice(end);
-        updatePage({ content: `${before}[[HL]]${sel}[[/HL]]${after}` });
-        setTimeout(()=>{ ta.focus(); ta.setSelectionRange(end+10, end+10); },0);
-      };
+    // ruled + grid
+    const gap = (cur?.style?.ruledSpacingMm||10)*PX_PER_MM;
+    const ruledStyle = useMemo(()=>({backgroundImage:"linear-gradient(to bottom, rgba(0,0,0,0.08) 1px, transparent 1px)",backgroundSize:`100% ${gap}px`,backgroundPosition:`0px 12px`,lineHeight:`${gap}px`,paddingTop:"12px"}),[gap]);
+    const gridOverlay = useMemo(()=>{
+      if(!cur?.style?.gridEnabled) return {};
+      const sz=(cur.style.gridSizeMm||10)*PX_PER_MM; const color="rgba(0,0,0,0.08)";
+      return {backgroundImage:`linear-gradient(${color} 1px, transparent 1px), linear-gradient(90deg, ${color} 1px, transparent 1px)`,backgroundSize:`${sz}px ${sz}px`,zIndex:10};
+    },[cur?.style?.gridEnabled,cur?.style?.gridSizeMm]);
 
-      // 付箋
-      const [defaultSticky, setDefaultSticky] = useState("M");
-      const stickyPreset = (k) => k==="S"?{w:120,h:90}: k==="L"?{w:240,h:180}:{w:160,h:120};
-      const addSticky = () => {
-        if (isView) return;
-        const { w,h } = stickyPreset(defaultSticky);
-        const newNote = { id: uuid(), x: 24, y: 24, w, h, title: "付箋", text: "" };
-        updatePage({ notes: [...(current.notes||[]), newNote] });
-      };
-      const updateNote = (id, patch) => {
-        if (isView) return;
-        const newNotes = (current.notes||[]).map(n => n.id===id ? { ...n, ...patch } : n);
-        updatePage({ notes: newNotes });
-      };
-      const deleteNote = (id) => {
-        if (isView) return;
-        updatePage({ notes: (current.notes||[]).filter(n => n.id !== id) });
-      };
+    // page dimension
+    const dims=(ps,ori)=>{ const m={a4:[210,297],b5:[182,257],a5:[148,210],letter:[216,279]}; let [w,h]=m[ps]||m.a4; if(ori==="landscape") [w,h]=[h,w]; return {w,h}; };
+    const d=dims(pageSize,orientation); const W=d.w*PX_PER_MM*zoom, H=d.h*PX_PER_MM*zoom;
 
-      // ドラッグ移動（ヘッダーのみ）
-      const dragState = useRef({ id:null, offX:0, offY:0 });
-      const onHeaderDown = (e, note) => {
-        if (isView) return;
-        const rect = e.currentTarget.parentElement.getBoundingClientRect();
-        dragState.current = { id: note.id, offX: e.clientX - rect.left, offY: e.clientY - rect.top };
-        window.addEventListener("mousemove", onMove);
-        window.addEventListener("mouseup", onUp);
-      };
-      const onMove = (e) => {
-        const { id, offX, offY } = dragState.current;
-        if (!id) return;
-        const container = document.getElementById("notesLayer").getBoundingClientRect();
-        let x = e.clientX - container.left - offX;
-        let y = e.clientY - container.top  - offY;
-        x = Math.max(0, Math.min(x, container.width  - 40));
-        y = Math.max(0, Math.min(y, container.height - 40));
-        updateNote(id, { x, y });
-      };
-      const onUp = () => {
-        dragState.current = { id:null, offX:0, offY:0 };
-        window.removeEventListener("mousemove", onMove);
-        window.removeEventListener("mouseup", onUp);
-      };
+    // tools
+    const [tool,setTool] = useState("text"); // text|pen|eraser|marker
+    const [penWidth,setPenWidth] = useState(2);
+    const [penColor,setPenColor] = useState("#111111");
+    const penActive = tool==="pen" || tool==="eraser" || tool==="marker";
+    const penProps = {active:penActive && !isView, color: tool==="marker" ? "rgba(255,235,59,0.5)" : penColor, width: tool==="marker" ? 10 : penWidth, isEraser: tool==="eraser"};
 
-      // 印刷/ズーム
-      const pageDims = (ps, orient) => {
-        let map = { a4:[210,297], b5:[182,257], a5:[148,210], letter:[216,279] };
-        let [w,h] = map[ps] || map.a4;
-        if (orient === "landscape") [w,h] = [h,w];
-        return { wmm:w, hmm:h };
-      };
-      const doPrint = () => {
-        const styleId = "print-style";
-        let st = document.getElementById(styleId);
-        const orient = orientation === "landscape" ? " landscape" : "";
-        const css = `@page { size: ${pageSize.toUpperCase()}${orient}; margin: 10mm; }`;
-        if (!st){ st = document.createElement("style"); st.id = styleId; document.head.appendChild(st); }
-        st.textContent = css;
-        window.print();
-      };
+    // sticky
+    const addSticky=()=>{ if(isView) return; const n={id:uid(),x:24,y:24,w:160,h:120,title:"付箋",text:""}; setPages(p=>p.map((pg,i)=>i===index?{...pg,notes:[...(pg.notes||[]),n]}:pg)); };
+    const updateNote=(id,patch)=> setPages(p=>p.map((pg,i)=>i===index?{...pg,notes:(pg.notes||[]).map(n=>n.id===id?{...n,...patch}:n)}:pg));
+    const deleteNote=(id)=> setPages(p=>p.map((pg,i)=>i===index?{...pg,notes:(pg.notes||[]).filter(n=>n.id!==id)}:pg));
+    const drag = useRef({id:null,offX:0,offY:0});
+    const onHeaderDown=(e,n)=>{ const r=e.currentTarget.parentElement.getBoundingClientRect(); drag.current={id:n.id,offX:e.clientX-r.left,offY:e.clientY-r.top}; window.addEventListener("mousemove",onMove); window.addEventListener("mouseup",onUp); };
+    const onMove=(e)=>{ const {id,offX,offY}=drag.current; if(!id) return; const layer=document.getElementById("notesLayer").getBoundingClientRect(); let x=e.clientX-layer.left-offX, y=e.clientY-layer.top-offY; x=Math.max(0,Math.min(x,layer.width-40)); y=Math.max(0,Math.min(y,layer.height-40)); updateNote(id,{x,y}); };
+    const onUp=()=>{ drag.current={id:null,offX:0,offY:0}; window.removeEventListener("mousemove",onMove); window.removeEventListener("mouseup",onUp); };
 
-      if (!current) return <div className="p-4">No pages</div>;
+    // save/export
+    const doSave=()=>{ localStorage.setItem(STORAGE, JSON.stringify({pages,index,pageSize,orientation,zoom})); alert("保存しました（ブラウザ内）"); };
+    const doExport=()=>{ const blob = new Blob([JSON.stringify({pages,index,pageSize,orientation,zoom},null,2)], {type:"application/json"}); const url=URL.createObjectURL(blob); const a=document.createElement("a"); a.href=url; a.download="notelink_backup.json"; a.click(); URL.revokeObjectURL(url); };
 
-      const hasInput = (current.content ?? "").length > 0;
-      const disableStyleSelect = hasInput || isView;
+    // pdf
+    const pdfInput = useRef(null);
+    const [pdfViewer,setPdfViewer] = useState(null);
+    const addPdf=(e)=>{ if(isView) return; const f=e.target.files?.[0]; if(!f) return; const url=URL.createObjectURL(f); const item={id:uid(),name:f.name,url}; setPdfs(prev=>[item,...prev]); e.target.value=""; };
+    const removePdf=(id)=> setPdfs(prev=>prev.filter(x=>x.id!==id));
 
-      const dim = pageDims(pageSize, orientation);
-      const pageWidthPx  = dim.wmm * PX_PER_MM * zoom;
-      const pageHeightPx = dim.hmm * PX_PER_MM * zoom;
+    // page ops
+    const addPage=()=>{ if(isView) return; const n={id:uid(),title:cur.title,content:"",style:{...cur.style},notes:[]}; const arr=[...pages,n]; setPages(arr); setIndex(arr.length-1); };
+    const deletePage=()=>{ if(isView) return; if(pages.length<=1){alert("最後のページは削除できません");return;} if(!confirm(`ページ ${index+1} を削除しますか？`)) return; const arr=pages.filter((_,i)=>i!==index); setPages(arr); setIndex(Math.max(0,index-1)); };
 
-      return (
-        <div className="w-full min-h-screen bg-neutral-50">
-          {/* ヘッダー（コンパクト） */}
-          <div className="sticky top-0 z-40 bg-white/90 backdrop-blur border-b no-print">
-            <div className="max-w-6xl mx-auto px-3 py-2 flex items-center gap-2">
-              <button className="px-2 py-1 rounded border" onClick={()=>setDrawerOpen(true)}>☰</button>
-              <div className="font-semibold text-neutral-700">Note Link <span className="text-xs text-neutral-500">{VERSION}</span></div>
-              <div className="flex items-center gap-2 ml-2">
-                <button className="px-2 py-1 rounded border" onClick={prev}>◀</button>
-                <div className="text-sm text-neutral-600">ページ {index + 1} / {pages.length}</div>
-                <button className="px-2 py-1 rounded border" onClick={next}>▶</button>
-              </div>
-              <div className="flex-1" />
-              {/* 閲覧/編集：統合スイッチ */}
-              <div className="inline-flex rounded-lg border overflow-hidden">
-                <button className={"px-3 py-1 text-sm " + (isView ? "bg-black text-white":"bg-white")} onClick={()=>setModeBoth("view")}>閲覧</button>
-                <button className={"px-3 py-1 text-sm " + (!isView ? "bg-black text-white":"bg-white")} onClick={()=>setModeBoth("edit")}>編集</button>
-              </div>
+    // print
+    const doPrint=()=>{ const styleId="print-style"; let st=document.getElementById(styleId); const orient = orientation==="landscape" ? " landscape":""; const css=`@page { size: ${pageSize.toUpperCase()}${orient}; margin: 10mm; }`; if(!st){st=document.createElement("style"); st.id=styleId; document.head.appendChild(st);} st.textContent=css; window.print(); };
+
+    // UI
+    return (
+      <div className="w-full min-h-screen bg-neutral-50">
+        {/* header */}
+        <div className="sticky top-0 z-40 bg-white/90 backdrop-blur border-b no-print">
+          <div className="max-w-6xl mx-auto px-3 py-2 flex items-center gap-2">
+            <button className="px-2 py-1 rounded border" onClick={()=>setDrawer(true)}>☰</button>
+            <div className="font-semibold text-neutral-700">Note Link <span className="text-xs text-neutral-500">{VERSION}</span></div>
+            <div className="flex items-center gap-2 ml-2">
+              <button className="px-2 py-1 rounded border" onClick={()=>setIndex(i=>Math.max(0,i-1))}>◀</button>
+              <div className="text-sm text-neutral-600">ページ {index+1} / {pages.length}</div>
+              <button className="px-2 py-1 rounded border" onClick={()=>setIndex(i=>Math.min(pages.length-1,i+1))}>▶</button>
             </div>
-          </div>
-
-          {/* 左ドロワー */}
-          {drawerOpen && (
-            <div className="fixed inset-0 z-50 flex">
-              <div className="w-80 h-full bg-white border-r shadow-xl p-3 overflow-y-auto drawer-open transition-transform no-print">
-                <div className="flex items-center justify-between mb-2">
-                  <div className="font-medium">ツール</div>
-                  <button className="px-2 py-1 rounded border" onClick={()=>setDrawerOpen(false)}>閉じる</button>
-                </div>
-
-                <div className="mb-4">
-                  <div className="text-sm text-neutral-600 mb-1">用紙・印刷</div>
-                  <div className="flex gap-2 mb-2">
-                    <select className="px-2 py-1 border rounded flex-1" value={pageSize} onChange={(e)=>setPageSize(e.target.value)}>
-                      <option value="a4">A4</option><option value="b5">B5</option><option value="a5">A5</option><option value="letter">Letter</option>
-                    </select>
-                    <select className="px-2 py-1 border rounded" value={orientation} onChange={(e)=>setOrientation(e.target.value)}>
-                      <option value="portrait">縦</option><option value="landscape">横</option>
-                    </select>
-                  </div>
-                  <div className="flex items-center gap-2 mb-2">
-                    <label className="text-sm text-neutral-600">ズーム</label>
-                    <select className="px-2 py-1 border rounded" value={String(zoom)} onChange={(e)=>setZoom(Number(e.target.value))}>
-                      <option value="0.75">75%</option><option value="1">100%</option><option value="1.25">125%</option><option value="1.5">150%</option><option value="2">200%</option>
-                    </select>
-                  </div>
-                  <button className="px-2 py-1 rounded border w-full" onClick={doPrint}>印刷（PDF保存）</button>
-                </div>
-
-                <div className="mb-4">
-                  <div className="text-sm text-neutral-600 mb-1">PDF ライブラリ</div>
-                  <div className="flex gap-2 mb-2">
-                    <input type="file" accept="application/pdf" className="hidden" ref={fileInputRef} onChange={addPdf} />
-                    <button className="px-2 py-1 rounded border flex-1 btn" onClick={()=> !isView && fileInputRef.current?.click()} disabled={isView}>PDF追加</button>
-                  </div>
-                  <ul className="space-y-2 max-h-[40vh] overflow-auto">
-                    {pdfs.length === 0 && (<li className="text-sm text-neutral-500">まだPDFがありません。</li>)}
-                    {pdfs.map(p => (
-                      <li key={p.id} className="flex items-center justify-between text-sm border rounded px-2 py-1">
-                        <span className="truncate mr-2" title={p.name}>{p.name}</span>
-                        <div className="flex gap-1">
-                          <button className="px-2 py-1 rounded border" onClick={()=>openPdf(p)}>開く</button>
-                          <button className="px-2 py-1 rounded border btn" onClick={()=>removePdf(p.id)} disabled={isView}>削除</button>
-                        </div>
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              </div>
-              <div className="flex-1 bg-black/30" onClick={()=>setDrawerOpen(false)}></div>
-            </div>
-          )}
-
-          {/* PDFプレビューモーダル */}
-          {pdfPreview && (
-            <div className="fixed inset-0 z-50 flex items-center justify-center">
-              <div className="absolute inset-0 bg-black/50" onClick={()=>setPdfPreview(null)}></div>
-              <div className="relative bg-white w-[90vw] h-[85vh] rounded shadow-xl p-2">
-                <div className="flex items-center justify-between mb-2">
-                  <div className="font-medium truncate">{pdfPreview.name}</div>
-                  <button className="px-2 py-1 rounded border" onClick={()=>setPdfPreview(null)}>閉じる</button>
-                </div>
-                <iframe src={pdfPreview.url} className="w-full h-[calc(85vh-48px)] border rounded"></iframe>
-              </div>
-            </div>
-          )}
-
-          {/* 本体 */}
-          <div className="max-w-6xl mx-auto p-3 grid grid-cols-1 gap-3">
-            <div className="bg-white border rounded-xl shadow-sm" style={{ width: pageWidthPx + 32, margin: "0 auto" }}>
-              <div className="p-3 sm:p-4">
-                {/* タイトル行 */}
-                <div className="flex flex-col sm:flex-row gap-2 mb-3">
-                  <input
-                    value={current.title}
-                    onChange={(e) => !isView && setPages(prev => prev.map((p,i)=> i===index? {...p, title: e.target.value}:p))}
-                    placeholder="タイトル"
-                    className="px-3 py-2 border rounded w-full text-base sm:text-lg"
-                    readOnly={isView}
-                  />
-                  <div className="flex gap-2 items-center">
-                    <button className="px-3 py-2 rounded border btn" onClick={addPage} disabled={isView}>＋ ページ追加</button>
-                    <button className="px-3 py-2 rounded border btn" onClick={deletePage} disabled={isView}>ページ削除</button>
-                  </div>
-                </div>
-
-                {/* ツールバー */}
-                <div className="flex flex-wrap items-center gap-2 mb-2 text-sm">
-                  <span className="text-neutral-600">ツール:</span>
-                  <button className="px-2 py-1 rounded border btn" disabled={isView}>✒ ペン</button>
-                  <button className="px-2 py-1 rounded border btn" disabled={isView}>🧽 消しゴム</button>
-                  <button className="px-2 py-1 rounded border btn" disabled={isView}>🖍 マーカー</button>
-                  <select className="px-2 py-1 border rounded" disabled={isView}><option>細</option><option>中</option><option>太</option></select>
-
-                  <div className="w-px h-5 bg-neutral-200 mx-1"></div>
-                  <label className="text-sm text-neutral-600">付箋サイズ</label>
-                  <select className="px-2 py-1 border rounded" value={"M"} onChange={()=>{}} disabled>（左ツール）</select>
-                  <button className="px-2 py-1 rounded border btn" onClick={addSticky} disabled={isView}>付箋</button>
-
-                  <div className="w-px h-5 bg-neutral-200 mx-1"></div>
-                  <label className="text-sm text-neutral-600">罫線幅</label>
-                  <select
-                    className="px-2 py-1 border rounded"
-                    value={String(current.style.ruledSpacingMm)}
-                    onChange={(e) => {
-                      if (isView) return;
-                      if ((current.content ?? '').length > 0) return;
-                      setPages(prev => prev.map((p,i)=> i===index? {...p, style:{...p.style, ruledSpacingMm:Number(e.target.value)}}:p));
-                    }}
-                    disabled={isView || (current.content ?? '').length > 0}
-                  >
-                    <option value="10">10 mm</option>
-                    <option value="8">8 mm</option>
-                    <option value="6">6 mm</option>
-                  </select>
-                  {(current.content ?? '').length > 0 && <span className="text-xs text-neutral-500">（入力開始後は罫線幅を固定）</span>}
-
-                  <div className="w-px h-5 bg-neutral-200 mx-1"></div>
-                  <button
-                    className={"px-3 py-1 rounded border btn " + (current.style.gridEnabled ? "bg-black text-white" : "")}
-                    onClick={() => !isView && setPages(prev => prev.map((p,i)=> i===index? {...p, style:{...p.style, gridEnabled: !p.style.gridEnabled}}:p))}
-                    disabled={isView}
-                  >グラフ升目 {current.style.gridEnabled ? "ON" : "OFF"}</button>
-                  <select
-                    className="px-2 py-1 border rounded"
-                    value={String(current.style.gridSizeMm)}
-                    onChange={(e) => !isView && setPages(prev => prev.map((p,i)=> i===index? {...p, style:{...p.style, gridSizeMm:Number(e.target.value)}}:p))}
-                    disabled={isView}
-                  >
-                    <option value="10">10 mm</option><option value="8">8 mm</option><option value="5">5 mm</option>
-                  </select>
-
-                  <div className="flex-1"></div>
-                  <button className="px-2 py-1 rounded border btn" onClick={applyHighlight} disabled={isView}>ハイライト</button>
-                </div>
-
-                {/* エディタ＋付箋レイヤ */}
-                <div className="relative border rounded-xl overflow-hidden" style={{ width: pageWidthPx, height: pageHeightPx }}>
-                  <div className="absolute inset-0 pointer-events-none" style={{...gridOverlay, zIndex:5}}></div>
-
-                  {/* 付箋 */}
-                  <div id="notesLayer" className="absolute inset-0 z-20" style={{ pointerEvents: isView ? "none" : "auto" }}>
-                    {(current.notes||[]).map(note => (
-                      <Sticky key={note.id}
-                              note={note}
-                              isView={isView}
-                              onHeaderDown={onHeaderDown}
-                              onDelete={deleteNote}
-                              onCommit={(id,patch)=>updateNote(id, patch)} />
-                    ))}
-                  </div>
-
-                  {/* テキスト */}
-                  <textarea
-                    ref={taRef}
-                    value={current.content}
-                    onChange={(e)=> !isView && setPages(prev => prev.map((p,i)=> i===index? {...p, content:e.target.value}:p))}
-                    placeholder="ここにノートを書き始める…（閲覧モードでは編集できません）"
-                    className="absolute inset-0 w-full h-full p-3 text-base bg-white z-10"
-                    style={ruledBg}
-                    readOnly={isView}
-                  ></textarea>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {/* モバイル下部 */}
-          <div className="sm:hidden sticky bottom-0 z-40 bg-white/90 backdrop-blur border-t no-print">
-            <div className="max-w-6xl mx-auto px-3 py-2 flex items-center gap-2">
-              <button className="px-2 py-1 rounded border" onClick={prev}>◀</button>
-              <div className="text-sm text-neutral-600">ページ {index + 1} / {pages.length}</div>
-              <button className="px-2 py-1 rounded border" onClick={next}>▶</button>
-              <div className="flex-1"></div>
-              <div className="inline-flex rounded-lg border overflow-hidden">
-                <button className={"px-3 py-1 text-sm " + (isView ? "bg-black text-white":"bg-white")} onClick={()=>setModeBoth("view")}>閲覧</button>
-                <button className={"px-3 py-1 text-sm " + (!isView ? "bg-black text-white":"bg-white")} onClick={()=>setModeBoth("edit")}>編集</button>
-              </div>
+            <div className="flex-1"></div>
+            <div className="inline-flex rounded-lg border overflow-hidden" role="tablist" aria-label="閲覧編集切替">
+              <button className={"px-3 py-1 text-sm "+(isView?"bg-black text-white":"bg-white")} onClick={()=>setModeBoth("view")}>閲覧</button>
+              <button className={"px-3 py-1 text-sm "+(!isView?"bg-black text-white":"bg-white")} onClick={()=>setModeBoth("edit")}>編集</button>
             </div>
           </div>
         </div>
-      );
-    }
-    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+
+        {/* drawer */}
+        {drawer && (
+          <div className="fixed inset-0 z-50 flex">
+            <div className="w-80 h-full bg-white border-r shadow-xl p-3 overflow-y-auto drawer">
+              <div className="flex items-center justify-between mb-2">
+                <div className="font-medium">ツール</div>
+                <button className="px-2 py-1 rounded border" onClick={()=>setDrawer(false)}>閉じる</button>
+              </div>
+
+              <div className="mb-4">
+                <div className="text-sm text-neutral-600 mb-1">印刷・表示</div>
+                <div className="flex gap-2 mb-2">
+                  <select className="px-2 py-1 border rounded flex-1" value={pageSize} onChange={e=>setPageSize(e.target.value)}>
+                    <option value="a4">A4</option><option value="b5">B5</option><option value="a5">A5</option><option value="letter">Letter</option>
+                  </select>
+                  <select className="px-2 py-1 border rounded" value={orientation} onChange={e=>setOrientation(e.target.value)}>
+                    <option value="portrait">縦</option><option value="landscape">横</option>
+                  </select>
+                </div>
+                <div className="flex items-center gap-2 mb-2">
+                  <label className="text-sm text-neutral-600">ズーム</label>
+                  <select className="px-2 py-1 border rounded" value={String(zoom)} onChange={e=>setZoom(Number(e.target.value))}>
+                    <option value="0.75">75%</option><option value="1">100%</option><option value="1.25">125%</option><option value="1.5">150%</option><option value="2">200%</option>
+                  </select>
+                </div>
+                <button className="px-2 py-1 rounded border w-full" onClick={doPrint}>印刷（PDF保存）</button>
+              </div>
+
+              <div className="mb-4">
+                <div className="text-sm text-neutral-600 mb-1">PDF ライブラリ（セッション内）</div>
+                <div className="flex gap-2 mb-2">
+                  <input type="file" accept="application/pdf" className="hidden" ref={pdfInput} onChange={addPdf}/>
+                  <button className="px-2 py-1 rounded border flex-1" onClick={()=>pdfInput.current?.click()} disabled={isView}>PDF追加</button>
+                </div>
+                <ul className="space-y-2 max-h-[40vh] overflow-auto">
+                  {pdfs.length===0 && (<li className="text-sm text-neutral-500">まだPDFがありません。</li>)}
+                  {pdfs.map(p=>(
+                    <li key={p.id} className="flex items-center justify-between text-sm border rounded px-2 py-1">
+                      <span className="truncate mr-2" title={p.name}>{p.name}</span>
+                      <div className="flex gap-1">
+                        <button className="px-2 py-1 rounded border" onClick={()=>setPdfViewer(p.url)}>開く</button>
+                        <button className="px-2 py-1 rounded border btn" onClick={()=>removePdf(p.id)} disabled={isView}>削除</button>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+
+              <div className="mb-4">
+                <div className="text-sm text-neutral-600 mb-1">バックアップ</div>
+                <button className="px-2 py-1 rounded border w-full mb-2" onClick={doSave}>保存（ブラウザ）</button>
+                <button className="px-2 py-1 rounded border w-full" onClick={doExport}>JSONエクスポート</button>
+              </div>
+            </div>
+            <div className="flex-1 bg-black/30" onClick={()=>setDrawer(false)}></div>
+          </div>
+        )}
+
+        {/* PDF viewer */}
+        {pdfViewer && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center">
+            <div className="absolute inset-0 bg-black/50" onClick={()=>setPdfViewer(null)}></div>
+            <div className="relative bg-white w-[92vw] h-[88vh] rounded shadow-xl p-2">
+              <div className="flex items-center justify-between mb-2">
+                <div className="font-medium">PDF プレビュー</div>
+                <button className="px-2 py-1 rounded border" onClick={()=>setPdfViewer(null)}>閉じる</button>
+              </div>
+              <iframe src={pdfViewer} className="w-full h-[calc(88vh-48px)] border rounded"></iframe>
+            </div>
+          </div>
+        )}
+
+        {/* main */}
+        <div className="max-w-6xl mx-auto p-3 grid grid-cols-1 gap-3">
+          <div className="bg-white border rounded-xl shadow-sm" style={{width: W+32, margin:"0 auto"}}>
+            <div className="p-3 sm:p-4">
+              {/* title row */}
+              <div className="flex flex-col sm:flex-row gap-2 mb-3">
+                <input value={cur.title} onChange={e=>!isView&&setPages(p=>p.map((pg,i)=>i===index?{...pg,title:e.target.value}:pg))} placeholder="タイトル" className="px-3 py-2 border rounded w-full text-base sm:text-lg" readOnly={isView}/>
+                <div className="flex gap-2 items-center">
+                  <button className="px-3 py-2 rounded border btn" onClick={addPage} disabled={isView}>＋ ページ追加</button>
+                  <button className="px-3 py-2 rounded border btn" onClick={deletePage} disabled={isView}>ページ削除</button>
+                </div>
+              </div>
+
+              {/* tools */}
+              <div className="flex flex-wrap items-center gap-2 mb-2 text-sm">
+                <span className="text-neutral-600">モード:</span>
+                <button className={"px-2 py-1 rounded border "+(tool==='text'?'tool-active':'')} onClick={()=>setTool('text')}>テキスト</button>
+                <button className={"px-2 py-1 rounded border "+(tool==='pen'?'tool-active':'')} onClick={()=>setTool('pen')}>ペン</button>
+                <button className={"px-2 py-1 rounded border "+(tool==='marker'?'tool-active':'')} onClick={()=>setTool('marker')}>マーカー</button>
+                <button className={"px-2 py-1 rounded border "+(tool==='eraser'?'tool-active':'')} onClick={()=>setTool('eraser')}>消しゴム</button>
+                <div className="w-px h-5 bg-neutral-200 mx-1"></div>
+                <label>太さ</label>
+                <select className="px-2 py-1 border rounded" value={String(penWidth)} onChange={e=>setPenWidth(Number(e.target.value))}>
+                  <option value="2">細</option><option value="4">中</option><option value="8">太</option>
+                </select>
+                <input type="color" value={penColor} onChange={e=>setPenColor(e.target.value)} className="w-9 h-6 p-0 border rounded"/>
+                <div className="w-px h-5 bg-neutral-200 mx-1"></div>
+                <label>罫線幅</label>
+                <select className="px-2 py-1 border rounded" value={String(cur.style.ruledSpacingMm||10)} onChange={e=>!isView && (cur.content?.length?null:setPages(p=>p.map((pg,i)=>i===index?{...pg,style:{...pg.style,ruledSpacingMm:Number(e.target.value)}}:pg)))} disabled={isView || (cur.content||'').length>0}>
+                  <option value="10">10 mm</option><option value="8">8 mm</option><option value="6">6 mm</option>
+                </select>
+                {(cur.content||'').length>0 && <span className="text-xs text-neutral-500">（入力開始後は罫線幅を固定）</span>}
+
+                <div className="w-px h-5 bg-neutral-200 mx-1"></div>
+                <button className={"px-3 py-1 rounded border "+(cur.style.gridEnabled?"bg-black text-white":"")} onClick={()=>!isView&&setPages(p=>p.map((pg,i)=>i===index?{...pg,style:{...pg.style,gridEnabled:!pg.style.gridEnabled}}:pg))}>グラフ升目 {cur.style.gridEnabled?"ON":"OFF"}</button>
+                <select className="px-2 py-1 border rounded" value={String(cur.style.gridSizeMm||10)} onChange={e=>!isView&&setPages(p=>p.map((pg,i)=>i===index?{...pg,style:{...pg.style,gridSizeMm:Number(e.target.value)}}:pg))} disabled={isView}>
+                  <option value="10">10 mm</option><option value="8">8 mm</option><option value="5">5 mm</option>
+                </select>
+
+                <div className="flex-1"></div>
+                <button className="px-2 py-1 rounded border btn" onClick={addSticky} disabled={isView}>付箋</button>
+              </div>
+
+              {/* editor */}
+              <div className="relative border rounded-xl overflow-hidden" style={{width:W,height:H}}>
+                {/* grid overlay */}
+                <div className="absolute inset-0 pointer-events-none" style={gridOverlay}></div>
+                {/* pen canvas */}
+                <PenLayer {...penProps} onStrokeEnd={()=>{}}/>
+                {/* notes */}
+                <div id="notesLayer" className="absolute inset-0" style={{pointerEvents:isView?'none':'auto'}}>
+                  {(cur.notes||[]).map(n=>(
+                    <Sticky key={n.id} note={n} isView={isView} onHeaderDown={onHeaderDown} onDelete={deleteNote} onChange={updateNote}/>
+                  ))}
+                </div>
+                {/* text */}
+                <textarea value={cur.content} onChange={e=>!isView&&setPages(p=>p.map((pg,i)=>i===index?{...pg,content:e.target.value}:pg))}
+                  placeholder={isView?"閲覧モードです（編集は上で切替）":"ここにノートを書き始める…"} className="absolute inset-0 w-full h-full p-3 text-base bg-white"
+                  style={{...ruledStyle, pointerEvents: (penActive||isView)?'none':'auto'}} readOnly={isView}></textarea>
+              </div>
+
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
   </script>
 </body>
 </html>
