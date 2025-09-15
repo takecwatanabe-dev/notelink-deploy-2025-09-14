@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Note Link v0.9.1（縦折りたたみ・ページ移動分離・背景単色）</title>
+  <title>Note Link v0.9.2（ギア結線修正・縦折りたたみ・背景単色）</title>
   <style>
     :root{ --bg:#0b1220; --panel:#111827; --ink:#e5e7eb; --muted:#374151; --accent:#50C878; }
     *{ box-sizing:border-box; }
@@ -33,7 +33,7 @@
     .tool{ width:40px; height:40px; border-radius:12px; display:grid; place-items:center; border:1px solid var(--muted); background:#0b1220; }
     .tool.active{ border-color:var(--accent); }
     .gear{ width:26px; height:26px; border-radius:8px; display:none; place-items:center; border:1px solid var(--muted); font-size:12px; opacity:.85; }
-    .toolGroup.active .gear{ display:grid; }
+    .toolGroup.active .gear{ display:grid; } /* 現在のツールのみギアを出す */
     .tool-label{ font-size:10px; opacity:.8; }
 
     .stage{ position:relative; background:#0b1220; background-image:none!important; }
@@ -55,7 +55,7 @@
 </head>
 <body>
   <header>
-    <div class="brand"><span class="dot"></span> Note Link v0.9.1 <span class="ver">v0.9.1</span></div>
+    <div class="brand"><span class="dot"></span> Note Link v0.9.2 <span class="ver">v0.9.2</span></div>
     <div class="actions">
       <button id="btnUndo" title="元に戻す (Ctrl+Z)">↶</button>
       <button id="btnRedo" title="やり直す (Ctrl+Y)">↷</button>
@@ -80,36 +80,43 @@
   <div class="wrap" id="wrap">
     <aside class="sidebar" id="sidebar">
       <div class="toggleBar" id="toggleBar" title="ツールバーを縦に折りたたむ/戻す">△</div>
+
       <div class="toolGroup" id="groupPen">
         <button class="tool active" id="toolPen" title="ペン">✎</button>
         <button class="gear" id="gearPen" title="ペン設定">⚙</button>
         <div class="tool-label">ペン</div>
       </div>
+
       <div class="toolGroup" id="groupHL">
         <button class="tool" id="toolHL" title="蛍光ペン">🖍</button>
         <button class="gear" id="gearHL" title="蛍光ペン設定">⚙</button>
         <div class="tool-label">蛍光</div>
       </div>
+
       <div class="toolGroup" id="groupEraser">
         <button class="tool" id="toolEraser" title="消しゴム">⌫</button>
         <button class="gear" id="gearEraser" title="消しゴム設定">⚙</button>
         <div class="tool-label">消</div>
       </div>
+
       <div class="toolGroup" id="groupPan">
         <button class="tool" id="toolPan" title="移動">🖐</button>
         <button class="gear" id="gearPan" title="移動設定">⚙</button>
         <div class="tool-label">移動</div>
       </div>
+
       <div class="toolGroup" id="groupText">
         <button class="tool" id="toolText" title="テキスト">⌨</button>
         <button class="gear" id="gearText" title="テキスト設定">⚙</button>
         <div class="tool-label">テキスト</div>
       </div>
+
       <div class="toolGroup" id="groupGuide">
         <button class="tool" id="toolGuide" title="罫線">📏</button>
         <button class="gear" id="gearGuide" title="罫線設定">⚙</button>
         <div class="tool-label">ガイド</div>
       </div>
+
       <div class="toolGroup" id="groupBg">
         <button class="tool" id="toolBg" title="背景色">🎨</button>
         <button class="gear" id="gearBg" title="背景色設定">⚙</button>
@@ -186,7 +193,7 @@
   </div></template>
 
   <script>
-  console.log('Note Link v0.9.1 ready');
+  console.log('Note Link v0.9.2 ready');
   const state = {
     pages:[{strokes:[],texts:[],bg:null,bgBitmap:null,bgSize:{w:0,h:0}}],
     pageIndex:0,
@@ -226,32 +233,56 @@
   function page(){ return state.pages[state.pageIndex]; }
 
   // tools
+  const groups = {
+    pen:document.getElementById('groupPen'),
+    hl:document.getElementById('groupHL'),
+    eraser:document.getElementById('groupEraser'),
+    pan:document.getElementById('groupPan'),
+    text:document.getElementById('groupText'),
+    guide:document.getElementById('groupGuide'),
+    bg:document.getElementById('groupBg'),
+  };
   const toolIds = { pen:'toolPen', hl:'toolHL', eraser:'toolEraser', pan:'toolPan', text:'toolText', guide:'toolGuide', bg:'toolBg' };
   function setTool(t){
     state.tool = t;
     Object.values(toolIds).forEach(id=>document.getElementById(id).classList.remove('active'));
     document.getElementById(toolIds[t]).classList.add('active');
+    Object.values(groups).forEach(g=>g.classList.remove('active'));
+    groups[t].classList.add('active'); // 現在ツールだけギアを表示
   }
   document.getElementById('toolPen').onclick = ()=> setTool('pen');
   document.getElementById('toolHL').onclick = ()=> setTool('hl');
   document.getElementById('toolEraser').onclick = ()=> setTool('eraser');
   document.getElementById('toolPan').onclick = ()=> setTool('pan');
   document.getElementById('toolText').onclick = ()=> setTool('text');
-  document.getElementById('toolGuide').onclick = ()=> openGear('guide');
-  document.getElementById('toolBg').onclick = ()=> openGear('bg');
+  document.getElementById('toolGuide').onclick = ()=> setTool('guide');
+  document.getElementById('toolBg').onclick = ()=> setTool('bg');
 
-  // gear
+  // ===== ギア（各ツールの設定） =====
   const flyout = document.getElementById('flyout');
   const flyoutBody = document.getElementById('flyoutBody');
   const flyoutTitle = document.getElementById('flyoutTitle');
   document.getElementById('flyoutClose').onclick = ()=> flyout.classList.add('hidden');
+
+  // ギア結線（ここが v0.9.1 からの修正点）
+  document.getElementById('gearPen').onclick    = ()=> openGear('pen');
+  document.getElementById('gearHL').onclick     = ()=> openGear('hl');
+  document.getElementById('gearEraser').onclick = ()=> openGear('eraser');
+  document.getElementById('gearPan').onclick    = ()=> openGear('pan');
+  document.getElementById('gearText').onclick   = ()=> openGear('text');
+  document.getElementById('gearGuide').onclick  = ()=> openGear('guide');
+  document.getElementById('gearBg').onclick     = ()=> openGear('bg');
+
   function openGear(kind){
     flyout.classList.remove('hidden');
-    flyoutTitle.textContent = ({ pen:'ペン設定', hl:'蛍光ペン設定', eraser:'消しゴム設定', bg:'背景色', guide:'罫線', text:'テキスト' }[kind]) || '設定';
-    const tmpl = document.getElementById('tmpl-'+(kind==='hl'?'hl':kind));
+    const titleMap = { pen:'ペン設定', hl:'蛍光ペン設定', eraser:'消しゴム設定', pan:'移動', text:'テキスト設定', guide:'罫線', bg:'背景色' };
+    flyoutTitle.textContent = titleMap[kind] || '設定';
+    let tmplId = 'tmpl-'+(kind==='hl'?'hl':kind);
+    const tmpl = document.getElementById(tmplId);
     flyoutBody.innerHTML=''; flyoutBody.appendChild(tmpl.content.cloneNode(true));
     bindGear(kind);
   }
+
   function bindGear(kind){
     if(kind==='pen'){
       const c = flyoutBody.querySelector('#color');
@@ -293,6 +324,17 @@
       sp.oninput=()=>{ state.guide.spacing=+sp.value; spv.textContent=sp.value; render(); };
       mg.oninput=()=>{ state.guide.marginLeft=+mg.value; mgv.textContent=mg.value; render(); };
       op.oninput=()=>{ state.guide.opacity=+op.value; opv.textContent=op.value; render(); };
+    }
+    if(kind==='pan'){
+      // いまは表示のみ（将来：ズーム範囲や慣性 on/off を追加予定）
+      const div=document.createElement('div'); div.className='row'; div.textContent='ドラッグで移動、ホイールでズーム（実装済み）';
+      flyoutBody.appendChild(div);
+    }
+    if(kind==='text'){
+      const c = flyoutBody.querySelector('#textColor');
+      const s = flyoutBody.querySelector('#textSize'); const sv = flyoutBody.querySelector('#textSizeVal');
+      c.value = '#ffffff'; s.value = 18; sv.textContent = '18';
+      c.oninput=()=>{}; s.oninput=()=>{ sv.textContent=s.value; };
     }
   }
 
@@ -349,7 +391,7 @@
     updatePageCount(); render(); e.target.value='';
   };
 
-  // input / drawing
+  // input / drawing（簡易版）
   const textInput = document.getElementById('textInput');
   function toCanvas(x,y){ const r=canvas.getBoundingClientRect(); return {x:(x-r.left - state.view.x)/state.view.scale, y:(y-r.top - state.view.y)/state.view.scale}; }
   canvas.addEventListener('pointerdown',(e)=>{
